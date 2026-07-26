@@ -11,8 +11,14 @@ config_version=5
 [application]
 
 config/name="De Pico y Pala Para Pincel"
-config/features=PackedStringArray("4.6", "Forward Plus")
+run/main_scene="uid://bl8ugu730o8q8"
+config/features=PackedStringArray("4.6", "C#", "Forward Plus")
 config/icon="res://icon.svg"
+
+[autoload]
+
+SupabaseManager="*uid://b0jvtmopvcvsj"
+PlayerManager="*uid://diu78ffetft4t"
 
 [dotnet]
 
