@@ -281,7 +281,7 @@ public partial class SupabaseManager : Node
 
         // Filtramos buscando filas donde 'invited_by' sea igual a tu nickname.
         // Solo traemos los datos que nos importan para ahorrar ancho de banda.
-        string url = $"{_supabaseUrl}/rest/v1/usuarios?invited_by=eq.{myNickname}&select=nickname,country,blocks_cleared";
+        string url = $"{_supabaseUrl}/rest/v1/usuarios?invited_by=eq.{myNickname}&select=nickname,country,blocks_cleared,tierra,piedra,pintura";
         
         string[] headers = {
             "apikey: " + _supabaseKey,

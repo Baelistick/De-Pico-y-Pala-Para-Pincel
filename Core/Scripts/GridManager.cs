@@ -4,10 +4,21 @@ using System.Collections.Generic;
 
 public partial class GridManager : TileMap
 {
+    // --- SISTEMA DE ENERGÍA Y RECARGA ---
+    private int _currentActionPoints = 50; 
+    private Label _actionPointsLabel;
+    private Timer _rechargeTimer;
+    private float _rechargeTimeMinutes = 10.0f; // [VARIABLE MODIFICABLE] Tiempo de recarga
+
     // --- SUPERPOSICIÓN DE COORDENADAS ---
     private Node2D _coordinateOverlay;
     public enum TileType { Canvas = 0, Dirt = 1, Stone = 2 }
     public enum ActionType { Paintbrush, Shovel, Pickaxe }
+
+    // --- RED DE REFUERZOS (GraphEdit UI) ---
+    private CanvasLayer _networkLayer;
+    private Godot.GraphEdit _networkGraph;
+    private Button _btnOpenNetwork;
 
     // --- BARRERA DE AUTENTICACIÓN (Lógica Dura) ---
     private CanvasLayer _authLayer;
@@ -16,6 +27,9 @@ public partial class GridManager : TileMap
     private LineEdit _passInput;
     private OptionButton _countrySelector;
     private bool _isPlayerAuthenticated = false;
+
+    // --- MEMORIA DE JUGADOR ACTIVO ---
+    private string _activePlayerNick = "";
     
     // Controles de Estado
     private bool _isLoginMode = false;
@@ -75,6 +89,13 @@ public partial class GridManager : TileMap
     {
         InitializeLocalGrid(); 
         InitializeProceduralUI();
+
+        // Inicializar Motor de Recarga de Energía
+        _rechargeTimer = new Timer();
+        _rechargeTimer.WaitTime = _rechargeTimeMinutes * 60.0f; // Convertimos minutos a segundos
+        _rechargeTimer.Autostart = true;
+        _rechargeTimer.Timeout += OnRechargeTick;
+        AddChild(_rechargeTimer);
 
         // 1. CAPA DE PINTURA: Se coloca sobre el TileMap (ZIndex = 5)
         _paintOverlay = new Node2D();
@@ -158,6 +179,15 @@ public partial class GridManager : TileMap
 
     }
 
+    private void OnRechargeTick()
+    {
+        _currentActionPoints++;
+        UpdateEnergyUI();
+        GD.Print($"[ECOSISTEMA] Recarga completada. Puntos actuales: {_currentActionPoints}");
+        
+        // PENDIENTE: Aquí luego inyectaremos la actualización silenciosa a Supabase
+    }
+
     private void DrawCoordinatesOverlay()
     {
         // Extraemos la fuente por defecto del motor
@@ -213,8 +243,6 @@ public partial class GridManager : TileMap
         _cursorRect.AddChild(_toolIcon);
         AddChild(_cursorRect);
 
-        
-
         // El Canvas de la UI
         CanvasLayer hudLayer = new CanvasLayer();
         HBoxContainer toolBar = new HBoxContainer();
@@ -238,24 +266,42 @@ public partial class GridManager : TileMap
         colorPicker.Color = CurrentPaintColor;
         colorPicker.ColorChanged += (Color newColor) => CurrentPaintColor = newColor;
 
-        // [NUEVO] Botones de Control de Lente
+        // Botones de Control de Lente
         Button btnZoomIn = new Button { Text = "🔍+" };
         Button btnZoomOut = new Button { Text = "🔍-" };
         
         btnZoomIn.Pressed += () => AdjustZoom(1.2f); // Aumenta el zoom un 20%
         btnZoomOut.Pressed += () => AdjustZoom(0.8f); // Reduce el zoom un 20%
 
+
+
+        // --- NUEVO: Botón de Red de Conexiones ---
+        _btnOpenNetwork = new Button { Text = "[ MIS REFUERZOS ]", CustomMinimumSize = new Vector2(200, 40) };
+        _btnOpenNetwork.AddThemeColorOverride("font_color", new Color(0.2f, 0.8f, 0.2f)); // Verde neón
+        _btnOpenNetwork.Pressed += OpenReinforcementsNetwork;
+
+        // ... (dentro de InitializeProceduralUI, justo antes de añadir cosas al toolBar) ...
+
+        // Indicador de Energía
+        _actionPointsLabel = new Label { Text = $"⚡ ENERGÍA: {_currentActionPoints} " };
+        _actionPointsLabel.AddThemeColorOverride("font_color", new Color(1.0f, 0.8f, 0.2f)); // Amarillo Neón
+        _actionPointsLabel.VerticalAlignment = VerticalAlignment.Center;
+
+
+
+        // Añadimos todo al contenedor horizontal (toolBar)
         toolBar.AddChild(btnBrush);
         toolBar.AddChild(btnShovel);
         toolBar.AddChild(btnPickaxe);
+        toolBar.AddChild(_actionPointsLabel); // INYECCIÓN AQUÍ
         toolBar.AddChild(colorPicker);
-
         toolBar.AddChild(btnZoomIn);
         toolBar.AddChild(btnZoomOut);
+        toolBar.AddChild(_btnOpenNetwork); // Inyectado de forma segura al final de la barra
         
         hudLayer.AddChild(toolBar);
 
-        // --- NUEVO: PANELES DE PROGRESO SUPERIOR ---
+        // --- PANELES DE PROGRESO SUPERIOR ---
         _totalTiles = GridSize.X * GridSize.Y;
 
         VBoxContainer topBarsContainer = new VBoxContainer();
@@ -295,6 +341,38 @@ public partial class GridManager : TileMap
         hudLayer.AddChild(topBarsContainer);
 
         AddChild(hudLayer);
+    }
+
+    private void UpdateEnergyUI()
+    {
+        if (_actionPointsLabel != null)
+        {
+            _actionPointsLabel.Text = $"⚡ ENERGÍA: {_currentActionPoints} ";
+            if (_currentActionPoints > 0)
+                _actionPointsLabel.AddThemeColorOverride("font_color", new Color(1.0f, 0.8f, 0.2f)); // Amarillo Normal
+            else
+                _actionPointsLabel.AddThemeColorOverride("font_color", new Color(0.9f, 0.2f, 0.2f)); // Rojo Alerta
+        }
+    }
+
+    // Devuelve TRUE si tienes energía (y te cobra un punto), FALSE si estás agotado
+    private bool TryConsumeActionPoint()
+    {
+        if (_currentActionPoints > 0)
+        {
+            _currentActionPoints--;
+            UpdateEnergyUI();
+            
+            // Reiniciamos el reloj para que no regale un punto a los 2 segundos de haber gastado uno
+            _rechargeTimer.Start(); 
+            return true;
+        }
+        else
+        {
+            GD.PrintErr("[SISTEMA] Energía agotada. Espere la recarga o llame a sus refuerzos.");
+            UpdateEnergyUI(); // Fuerza el color rojo
+            return false;
+        }
     }
 
     private void UpdateTool(ActionType tool, string icon, Color color)
@@ -472,7 +550,8 @@ public partial class GridManager : TileMap
     {
         // [CORTAFUEGOS] Si no ha ingresado, se ignora cualquier acción física
         if (!_isPlayerAuthenticated) return;
-        // MÁQUINA DE ESTADOS Y MACROS DE TECLADO
+
+        // MÁQUINA DE ESTADOS Y ATAJOS DE TECLADO
         if (@event is InputEventKey keyEvent && keyEvent.Pressed)
         {
             if (keyEvent.Keycode == Key.Key1) 
@@ -493,31 +572,17 @@ public partial class GridManager : TileMap
                 _toolIcon.Text = "⛏"; 
                 _toolIcon.Modulate = new Color(1, 1, 1); 
             }
-            
-            // [MACRO DE DESARROLLADOR] - Tecla 4: Sellar el Anillo Exterior (Capa 0)
-            if (keyEvent.Keycode == Key.Key4)
-            {
-                AutoSealLayer(0);
-                return;
-            }
-            // [MACRO DE DESARROLLADOR] - Tecla 5: Sellar el Anillo Interior (Capa 1)
-            if (keyEvent.Keycode == Key.Key5)
-            {
-                AutoSealLayer(1);
-                return;
-            }
             return;
         }
 
-        // [NUEVO] LÓGICA DE TRAZO CONTINUO (Arrastrar el ratón)
-        if (@event is InputEventMouseMotion motionEvent && (motionEvent.ButtonMask & MouseButtonMask.Left) != 0)
+        // LÓGICA CLÁSICA DE CLIC SIMPLE (Un bloque a la vez)
+        if (@event is InputEventMouseButton mouseEvent && mouseEvent.Pressed && mouseEvent.ButtonIndex == MouseButton.Left)
         {
-            ProcessMapInteraction(GetLocalMousePosition());
-        }
-        // Lógica clásica de clic simple
-        else if (@event is InputEventMouseButton mouseEvent && mouseEvent.Pressed && mouseEvent.ButtonIndex == MouseButton.Left)
-        {
-            ProcessMapInteraction(GetLocalMousePosition());
+            // BARRERA DE ENERGÍA
+            if (TryConsumeActionPoint())
+            {
+                ProcessMapInteraction(GetLocalMousePosition());
+            }
         }
     }
 
@@ -898,14 +963,15 @@ public partial class GridManager : TileMap
         if (success)
         {
             // 1. EL DESBLOQUEO REAL
+            string activeNickname = _nickInput.Text.Trim(); 
+            _activePlayerNick = activeNickname; // GUARDAMOS EL DATO EN LA MEMORIA SEGURA
+            
             _isPlayerAuthenticated = true;
-            _authLayer.QueueFree(); 
+            _authLayer.QueueFree(); // Ahora sí, podemos destruir el menú con seguridad
             GD.Print("[SISTEMA] Enlace autorizado. Despliegue de herramientas tácticas habilitado.");
             
             // 2. PRUEBA TÁCTICA DE CONEXIONES
-            string activeNickname = _nickInput.Text.Trim(); 
-            
-            SupabaseManager.Instance.GetConnections(activeNickname, (connectionsData) => 
+            SupabaseManager.Instance.GetConnections(_activePlayerNick, (connectionsData) => 
             {
                 if (connectionsData != null && connectionsData.Count > 0)
                 {
@@ -971,5 +1037,95 @@ public partial class GridManager : TileMap
             dividend = (int)((dividend - modulo) / 26);
         }
         return columnName;
+    }
+
+    // =======================================================
+    // RENDERIZADO VISUAL DE LA RED DE CONEXIONES
+    // =======================================================
+
+    private void OpenReinforcementsNetwork()
+    {
+        _networkLayer = new CanvasLayer();
+        _networkLayer.Layer = 90; 
+
+        ColorRect bg = new ColorRect { Color = new Color(0.08f, 0.08f, 0.1f, 0.98f) };
+        bg.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        _networkLayer.AddChild(bg);
+
+        _networkGraph = new Godot.GraphEdit();
+        _networkGraph.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        _networkGraph.RightDisconnects = false; 
+        _networkGraph.ConnectionLinesCurvature = 0.5f; 
+        _networkLayer.AddChild(_networkGraph);
+
+        Button btnClose = new Button { Text = "[ X ] CERRAR RED", CustomMinimumSize = new Vector2(150, 40) };
+        btnClose.SetAnchorsPreset(Control.LayoutPreset.TopRight); 
+        btnClose.Position = new Vector2(-170, 20); 
+        btnClose.AddThemeColorOverride("font_color", new Color(0.9f, 0.2f, 0.2f));
+        btnClose.Pressed += () => _networkLayer.QueueFree();
+        _networkLayer.AddChild(btnClose);
+
+        AddChild(_networkLayer);
+
+        // 5. Generar nuestro propio Nodo Central (Temporalmente en 0 todo)
+        GraphNode myNode = CreatePlayerNode("Root", _activePlayerNick, "🇺🇳", "Tú", 0, 0, 0, 0, new Vector2(100, 200));
+        _networkGraph.AddChild(myNode);
+
+        // 6. Solicitar los datos a Supabase
+        SupabaseManager.Instance.GetConnections(_activePlayerNick, (connectionsData) => 
+        {
+            if (connectionsData != null && connectionsData.Count > 0)
+            {
+                int yOffset = 50; 
+                int index = 0;
+
+                foreach (Godot.Collections.Dictionary recluta in connectionsData)
+                {
+                    string n = (string)recluta["nickname"];
+                    string c = (string)recluta["country"];
+                    
+                    // Extraemos los datos con seguridad matemática
+                    int blocks = recluta.ContainsKey("blocks_cleared") ? recluta["blocks_cleared"].AsInt32() : 0;
+                    int tierra = recluta.ContainsKey("tierra") ? recluta["tierra"].AsInt32() : 0;
+                    int piedra = recluta.ContainsKey("piedra") ? recluta["piedra"].AsInt32() : 0;
+                    int pintura = recluta.ContainsKey("pintura") ? recluta["pintura"].AsInt32() : 0;
+
+                    // Inyectamos todo en la fábrica de nodos
+                    GraphNode recruitNode = CreatePlayerNode($"Recruit_{index}", n, c, "Recluta", blocks, tierra, piedra, pintura, new Vector2(500, yOffset));
+                    
+                    _networkGraph.AddChild(recruitNode);
+                    _networkGraph.ConnectNode("Root", 0, $"Recruit_{index}", 0);
+
+                    yOffset += 150; 
+                    index++;
+                }
+            }
+        });
+    }
+
+    // Crea las "cajas" individuales que se conectan con los hilos
+    // Crea las "cajas" individuales que se conectan con los hilos
+    private GraphNode CreatePlayerNode(string idName, string nick, string country, string rank, int blocks, int tierra, int piedra, int pintura, Vector2 position)
+    {
+        GraphNode node = new GraphNode();
+        node.Name = idName;
+        node.Title = $"{country} {nick} [{rank}]";
+        node.PositionOffset = position; 
+
+        node.SetSlot(0, true, 0, new Color(0.2f, 0.8f, 0.2f), true, 0, new Color(0.2f, 0.8f, 0.2f));
+
+        VBoxContainer box = new VBoxContainer();
+        box.Name = "DataContainer"; 
+        node.AddChild(box);
+
+        // Inyectamos todas las estadísticas en tiempo real
+        Label statsLabel = new Label();
+        statsLabel.Name = "StatsLabel";
+        statsLabel.Text = $"Bloques Totales: {blocks}\n[ Tierra: {tierra} | Piedra: {piedra} | Pintura: {pintura} ]";
+        statsLabel.AddThemeColorOverride("font_color", new Color(0.7f, 0.7f, 0.7f));
+        
+        box.AddChild(statsLabel);
+
+        return node;
     }
 }
