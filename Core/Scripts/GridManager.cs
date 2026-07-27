@@ -10,6 +10,19 @@ public partial class GridManager : TileMap
     private Timer _rechargeTimer;
     private float _rechargeTimeMinutes = 10.0f; // [VARIABLE MODIFICABLE] Tiempo de recarga
 
+    // --- TRADUCTOR DE BANDERAS ISO ---
+    private readonly Dictionary<string, string> _countryToIso = new Dictionary<string, string>
+    {
+        {"Argentina", "ar"}, {"Bolivia", "bo"}, {"Brasil", "br"}, {"Canadá", "ca"},
+        {"Chile", "cl"}, {"Colombia", "co"}, {"Costa Rica", "cr"}, {"Cuba", "cu"},
+        {"Ecuador", "ec"}, {"El Salvador", "sv"}, {"España", "es"}, {"Estados Unidos", "us"},
+        {"Guatemala", "gt"}, {"Honduras", "hn"}, {"México", "mx"}, {"Nicaragua", "ni"},
+        {"Panamá", "pa"}, {"Paraguay", "py"}, {"Perú", "pe"}, {"Puerto Rico", "pr"},
+        {"República Dominicana", "do"}, {"Uruguay", "uy"}, {"Venezuela", "ve"},
+        {"Alemania", "de"}, {"China", "cn"}, {"Francia", "fr"}, {"Italia", "it"},
+        {"Japón", "jp"}, {"Reino Unido", "gb"}, {"Rusia", "ru"}
+    };
+
     // --- SUPERPOSICIÓN DE COORDENADAS ---
     private Node2D _coordinateOverlay;
     public enum TileType { Canvas = 0, Dirt = 1, Stone = 2 }
@@ -154,7 +167,7 @@ public partial class GridManager : TileMap
 
         // [DESBLOQUEO TÁCTICO] 
         // Descomenta esto SOLO cuando hayas limpiado tu base de datos (TRUNCATE TABLE pixels)
-        /*
+        
         SupabaseManager.Instance.FetchAllPixels((serverData) => 
         {
             foreach (var item in serverData)
@@ -175,8 +188,7 @@ public partial class GridManager : TileMap
             }
             _paintOverlay.QueueRedraw();
         });
-        */
-
+        
     }
 
     private void OnRechargeTick()
@@ -184,8 +196,6 @@ public partial class GridManager : TileMap
         _currentActionPoints++;
         UpdateEnergyUI();
         GD.Print($"[ECOSISTEMA] Recarga completada. Puntos actuales: {_currentActionPoints}");
-        
-        // PENDIENTE: Aquí luego inyectaremos la actualización silenciosa a Supabase
     }
 
     private void DrawCoordinatesOverlay()
@@ -255,6 +265,11 @@ public partial class GridManager : TileMap
         Button btnBrush = new Button { Text = "🖌 Pincel" };
         Button btnShovel = new Button { Text = "⚒ Pala" };
         Button btnPickaxe = new Button { Text = "⛏ Pico" };
+
+        // --- INYECCIÓN DEL BOTÓN DE OBJETIVOS ---
+        Button btnObjectives = new Button { Text = "📋 OBJETIVOS", CustomMinimumSize = new Vector2(150, 40) };
+        btnObjectives.AddThemeColorOverride("font_color", new Color(1.0f, 0.8f, 0.2f)); // Amarillo Neón
+        btnObjectives.Pressed += OpenObjectivesPanel;
         
         btnBrush.Pressed += () => UpdateTool(ActionType.Paintbrush, "🖌", new Color(1, 1, 1));
         btnShovel.Pressed += () => UpdateTool(ActionType.Shovel, "⚒", new Color(1, 1, 1));
@@ -273,21 +288,51 @@ public partial class GridManager : TileMap
         btnZoomIn.Pressed += () => AdjustZoom(1.2f); // Aumenta el zoom un 20%
         btnZoomOut.Pressed += () => AdjustZoom(0.8f); // Reduce el zoom un 20%
 
-
-
         // --- NUEVO: Botón de Red de Conexiones ---
         _btnOpenNetwork = new Button { Text = "[ MIS REFUERZOS ]", CustomMinimumSize = new Vector2(200, 40) };
         _btnOpenNetwork.AddThemeColorOverride("font_color", new Color(0.2f, 0.8f, 0.2f)); // Verde neón
         _btnOpenNetwork.Pressed += OpenReinforcementsNetwork;
 
-        // ... (dentro de InitializeProceduralUI, justo antes de añadir cosas al toolBar) ...
+        // --- NUEVO: SISTEMA DE ENLACE (PORTAPAPELES) ---
+        Button btnCopyLink = new Button { Text = "🔗 COPIAR ENLACE", CustomMinimumSize = new Vector2(180, 40) };
+        btnCopyLink.AddThemeColorOverride("font_color", new Color(0.2f, 0.8f, 1.0f)); // Azul Neón (Cyberpunk)
+        
+        btnCopyLink.Pressed += () => 
+        {
+            // 1. Validamos que el operativo esté registrado
+            if (string.IsNullOrEmpty(_activePlayerNick))
+            {
+                GD.PrintErr("[SISTEMA] No hay un operativo activo para generar el enlace.");
+                return;
+            }
+
+            // 2. Construimos la URL con la Lógica Dura (Cambia "tujuego.com" por tu dominio final)
+            string refLink = $"https://tujuego.com/play?ref={_activePlayerNick}";
+            
+            // 3. Inyectamos el enlace directamente al portapapeles del Sistema Operativo
+            DisplayServer.ClipboardSet(refLink);
+            GD.Print($"[RED] Enlace copiado al portapapeles: {refLink}");
+
+            // 4. Feedback Visual Inmediato (Juice)
+            btnCopyLink.Text = "[ ¡COPIADO! ]";
+            btnCopyLink.AddThemeColorOverride("font_color", new Color(0.2f, 1.0f, 0.2f)); // Cambia a Verde
+
+            // 5. Motor de temporización para devolver el botón a la normalidad en 2 segundos
+            GetTree().CreateTimer(2.0f).Timeout += () => 
+            {
+                // Solo restauramos si el botón sigue existiendo en la memoria
+                if (IsInstanceValid(btnCopyLink)) 
+                {
+                    btnCopyLink.Text = "🔗 COPIAR ENLACE";
+                    btnCopyLink.AddThemeColorOverride("font_color", new Color(0.2f, 0.8f, 1.0f)); // Vuelve a Azul
+                }
+            };
+        };
 
         // Indicador de Energía
         _actionPointsLabel = new Label { Text = $"⚡ ENERGÍA: {_currentActionPoints} " };
         _actionPointsLabel.AddThemeColorOverride("font_color", new Color(1.0f, 0.8f, 0.2f)); // Amarillo Neón
         _actionPointsLabel.VerticalAlignment = VerticalAlignment.Center;
-
-
 
         // Añadimos todo al contenedor horizontal (toolBar)
         toolBar.AddChild(btnBrush);
@@ -298,6 +343,8 @@ public partial class GridManager : TileMap
         toolBar.AddChild(btnZoomIn);
         toolBar.AddChild(btnZoomOut);
         toolBar.AddChild(_btnOpenNetwork); // Inyectado de forma segura al final de la barra
+        toolBar.AddChild(btnCopyLink); // <--- INYECCIÓN AQUÍ
+        toolBar.AddChild(btnObjectives); // <--- NUEVO BOTÓN AQUÍ
         
         hudLayer.AddChild(toolBar);
 
@@ -355,26 +402,6 @@ public partial class GridManager : TileMap
         }
     }
 
-    // Devuelve TRUE si tienes energía (y te cobra un punto), FALSE si estás agotado
-    private bool TryConsumeActionPoint()
-    {
-        if (_currentActionPoints > 0)
-        {
-            _currentActionPoints--;
-            UpdateEnergyUI();
-            
-            // Reiniciamos el reloj para que no regale un punto a los 2 segundos de haber gastado uno
-            _rechargeTimer.Start(); 
-            return true;
-        }
-        else
-        {
-            GD.PrintErr("[SISTEMA] Energía agotada. Espere la recarga o llame a sus refuerzos.");
-            UpdateEnergyUI(); // Fuerza el color rojo
-            return false;
-        }
-    }
-
     private void UpdateTool(ActionType tool, string icon, Color color)
     {
         CurrentTool = tool;
@@ -403,7 +430,6 @@ public partial class GridManager : TileMap
         UpdateCleanlinessScore();
     }
 
-    // 5. GENERACIÓN ALEATORIA DE ESCUADRONES DE ROCA Y TIERRA
     // 5. GENERACIÓN ALEATORIA Y SISTEMA DE DEFENSAS (Lógica Dura)
     private void SpawnRandomDebris()
     {
@@ -417,9 +443,9 @@ public partial class GridManager : TileMap
             return; // Bloquea todo el spawn
         }
 
-        int debrisToSpawn = 5; 
+        int debrisToSpawn = 45; 
         int spawned = 0;
-        int maxAttempts = 50;  
+        int maxAttempts = 200;  
         int attempts = 0;
 
         // Establecer permisos de generación
@@ -464,7 +490,6 @@ public partial class GridManager : TileMap
         }
     }
 
-    // Algoritmo de Escaneo Perimetral Vectorial
     // Algoritmo de Escaneo Perimetral Vectorial con Radar de Brechas
     private bool CheckLayerSealed(int layer)
     {
@@ -578,10 +603,15 @@ public partial class GridManager : TileMap
         // LÓGICA CLÁSICA DE CLIC SIMPLE (Un bloque a la vez)
         if (@event is InputEventMouseButton mouseEvent && mouseEvent.Pressed && mouseEvent.ButtonIndex == MouseButton.Left)
         {
-            // BARRERA DE ENERGÍA
-            if (TryConsumeActionPoint())
+            // BARRERA DE ENERGÍA: Verificamos si hay energía antes de procesar el golpe
+            if (_currentActionPoints > 0)
             {
                 ProcessMapInteraction(GetLocalMousePosition());
+            }
+            else
+            {
+                GD.PrintErr("[SISTEMA] Energía agotada. Espere la recarga o llame a sus refuerzos.");
+                UpdateEnergyUI(); // Fuerza el color rojo
             }
         }
     }
@@ -593,41 +623,14 @@ public partial class GridManager : TileMap
 
         if (IsWithinBounds(mapPosition))
         {
+            // LÓGICA DURA: Ejecutamos el golpe. Si devuelve TRUE (es decir, sí rompimos o pintamos algo), cobramos el punto de energía.
             if (ExecuteAction(mapPosition))
             {
-                // PlayerManager.Instance.ConsumeAction(); // [DESACTIVADO EN PRUEBAS]
+                _currentActionPoints--;
+                UpdateEnergyUI();
+                _rechargeTimer.Start(); // Reiniciamos el reloj para que no regale un punto gratis
             }
         }
-    }
-
-    // Herramienta de fuerza bruta para testear defensas al instante
-    private void AutoSealLayer(int layer)
-    {
-        if (CurrentTool != ActionType.Paintbrush)
-        {
-            GD.Print("[DEV] Debes tener el Pincel seleccionado para usar la macro de auto-sellado.");
-            return;
-        }
-
-        string hexColor = "#" + CurrentPaintColor.ToHtml(false);
-        int min = layer;
-        int maxX = GridSize.X - 1 - layer;
-        int maxY = GridSize.Y - 1 - layer;
-
-        // Limpia escombros y pinta el marco superior e inferior
-        for (int x = min; x <= maxX; x++) 
-        { 
-            UpdateTileLocal(new Vector2I(x, min), TileType.Canvas, hexColor); 
-            UpdateTileLocal(new Vector2I(x, maxY), TileType.Canvas, hexColor); 
-        }
-        // Limpia escombros y pinta el marco izquierdo y derecho
-        for (int y = min; y <= maxY; y++) 
-        { 
-            UpdateTileLocal(new Vector2I(min, y), TileType.Canvas, hexColor); 
-            UpdateTileLocal(new Vector2I(maxX, y), TileType.Canvas, hexColor); 
-        }
-        
-        GD.Print($"[DEV] Capa {layer} sellada artificialmente con éxito.");
     }
 
     private bool ExecuteAction(Vector2I pos)
@@ -640,8 +643,12 @@ public partial class GridManager : TileMap
                 if (currentTile == TileType.Stone) 
                 { 
                     // Transforma la Piedra en Lienzo (Blanco) y limpia cualquier color
-                    UpdateTileLocal(pos, TileType.Canvas, null); 
+                    UpdateTileLocal(pos, TileType.Canvas, null);
+                    SpawnImpactEffects(pos, ActionType.Pickaxe); // <--- INYECCIÓN VFX
                     GD.Print($"[ÉXITO] Piedra destruida en {pos}. Ahora es Lienzo Blanco.");
+                    
+                    // DISPARADOR DE TELEMETRÍA (Lógica Dura)
+                    SupabaseManager.Instance.IncrementUserStat(_activePlayerNick, "piedra");
                     return true; 
                 }
                 GD.Print($"[FALLO] El Pico solo rompe Piedra. Bloque actual: {currentTile}");
@@ -651,8 +658,12 @@ public partial class GridManager : TileMap
                 if (currentTile == TileType.Dirt) 
                 { 
                     // Transforma la Tierra en Lienzo (Blanco) y limpia cualquier color
-                    UpdateTileLocal(pos, TileType.Canvas, null); 
+                    UpdateTileLocal(pos, TileType.Canvas, null);
+                    SpawnImpactEffects(pos, ActionType.Shovel); // <--- INYECCIÓN VFX
                     GD.Print($"[ÉXITO] Tierra removida en {pos}. Ahora es Lienzo Blanco.");
+                    
+                    // DISPARADOR DE TELEMETRÍA (Lógica Dura)
+                    SupabaseManager.Instance.IncrementUserStat(_activePlayerNick, "tierra");
                     return true; 
                 }
                 GD.Print($"[FALLO] La Pala solo remueve Tierra. Bloque actual: {currentTile}");
@@ -664,7 +675,11 @@ public partial class GridManager : TileMap
                     // Solo si es Lienzo Blanco, extrae el color del UI y lo aplica
                     string hexColor = "#" + CurrentPaintColor.ToHtml(false);
                     UpdateTileLocal(pos, TileType.Canvas, hexColor); 
+                    SpawnImpactEffects(pos, ActionType.Paintbrush, hexColor); // <--- INYECCIÓN VFX
                     GD.Print($"[ÉXITO] Lienzo pintado con color {hexColor} en {pos}.");
+                    
+                    // DISPARADOR DE TELEMETRÍA (Lógica Dura)
+                    SupabaseManager.Instance.IncrementUserStat(_activePlayerNick, "pintura");
                     return true; 
                 }
                 GD.Print($"[FALLO] El Pincel solo pinta sobre Lienzo Blanco. Bloque actual: {currentTile}. ¡Límpialo primero!");
@@ -869,33 +884,69 @@ public partial class GridManager : TileMap
         centerWrapper.AddChild(formContainer);
 
         // Título Dinámico
-        _authTitleLabel = new Label { Text = "SISTEMA DE ENLACE: NUEVO REGISTRO", HorizontalAlignment = HorizontalAlignment.Center };
+        _authTitleLabel = new Label { Text = "REGISTRARSE", HorizontalAlignment = HorizontalAlignment.Center };
         _authTitleLabel.AddThemeColorOverride("font_color", new Color(0.2f, 0.8f, 0.2f)); 
         formContainer.AddChild(_authTitleLabel);
 
-        _nickInput = new LineEdit { PlaceholderText = "INGRESE SU NICK (Ej. Baelistick)", Alignment = HorizontalAlignment.Center };
+        _nickInput = new LineEdit { PlaceholderText = "INGRESE UN NICK", Alignment = HorizontalAlignment.Center };
         formContainer.AddChild(_nickInput);
 
-        _passInput = new LineEdit { PlaceholderText = "PASSWORD TEMPORAL", Alignment = HorizontalAlignment.Center, Secret = true }; 
+        _passInput = new LineEdit { PlaceholderText = "CONTRASEÑA", Alignment = HorizontalAlignment.Center, Secret = true }; 
         formContainer.AddChild(_passInput);
 
         _countrySelector = new OptionButton();
         _countrySelector.Alignment = HorizontalAlignment.Center;
-        _countrySelector.AddItem("🇻🇪 Venezuela", 0);
-        _countrySelector.AddItem("🇲🇽 México", 1);
-        _countrySelector.AddItem("🇦🇷 Argentina", 2);
-        _countrySelector.AddItem("🇪🇸 España", 3);
+
+        // Cargamos la fuente de emojis desde los archivos del proyecto
+        Font emojiFont = GD.Load<Font>("res://Resource/Fonts/NotoColorEmoji.ttf");
+        _countrySelector.AddThemeFontOverride("font", emojiFont);
+
+        // --- BASE DE DATOS REGIONAL Y GLOBAL ---
+        _countrySelector.AddItem("🇦🇷 Argentina", 0);
+        _countrySelector.AddItem("🇧🇴 Bolivia", 1);
+        _countrySelector.AddItem("🇧🇷 Brasil", 2);
+        _countrySelector.AddItem("🇨🇦 Canadá", 3);
         _countrySelector.AddItem("🇨🇱 Chile", 4);
-        _countrySelector.AddItem("🇺🇳 Otra / Global", 5);
+        _countrySelector.AddItem("🇨🇴 Colombia", 5);
+        _countrySelector.AddItem("🇨🇷 Costa Rica", 6);
+        _countrySelector.AddItem("🇨🇺 Cuba", 7);
+        _countrySelector.AddItem("🇪🇨 Ecuador", 8);
+        _countrySelector.AddItem("🇸🇻 El Salvador", 9);
+        _countrySelector.AddItem("🇪🇸 España", 10);
+        _countrySelector.AddItem("🇺🇸 Estados Unidos", 11);
+        _countrySelector.AddItem("🇬🇹 Guatemala", 12);
+        _countrySelector.AddItem("🇭🇳 Honduras", 13);
+        _countrySelector.AddItem("🇲🇽 México", 14);
+        _countrySelector.AddItem("🇳🇮 Nicaragua", 15);
+        _countrySelector.AddItem("🇵🇦 Panamá", 16);
+        _countrySelector.AddItem("🇵🇾 Paraguay", 17);
+        _countrySelector.AddItem("🇵🇪 Perú", 18);
+        _countrySelector.AddItem("🇵🇷 Puerto Rico", 19);
+        _countrySelector.AddItem("🇩🇴 República Dominicana", 20);
+        _countrySelector.AddItem("🇺🇾 Uruguay", 21);
+        _countrySelector.AddItem("🇻🇪 Venezuela", 22);
+        
+        // Módulo Intercontinental
+        _countrySelector.AddItem("🇩🇪 Alemania", 23);
+        _countrySelector.AddItem("🇨🇳 China", 24);
+        _countrySelector.AddItem("🇫🇷 Francia", 25);
+        _countrySelector.AddItem("🇮🇹 Italia", 26);
+        _countrySelector.AddItem("🇯🇵 Japón", 27);
+        _countrySelector.AddItem("🇬🇧 Reino Unido", 28);
+        _countrySelector.AddItem("🇷🇺 Rusia", 29);
+        
+        // Fallback del Ecosistema
+        _countrySelector.AddItem("🇺🇳 Otra / Global", 30);
+
         formContainer.AddChild(_countrySelector);
 
         // Botón Principal
-        _submitAuthBtn = new Button { Text = "[ REGISTRAR NUEVO ENLACE ]", CustomMinimumSize = new Vector2(0, 50) };
+        _submitAuthBtn = new Button { Text = "CONFIRMAR REGISTRO", CustomMinimumSize = new Vector2(0, 50) };
         _submitAuthBtn.Pressed += ProcessLoginAttempt;
         formContainer.AddChild(_submitAuthBtn);
 
         // NUEVO: Botón para cambiar entre Login y Registro
-        _toggleModeBtn = new Button { Text = "¿Ya tienes un enlace? Iniciar Sesión", Flat = true };
+        _toggleModeBtn = new Button { Text = "¿Ya tienes un usuario? Iniciar Sesión", Flat = true };
         _toggleModeBtn.AddThemeColorOverride("font_color", new Color(0.6f, 0.6f, 0.6f)); // Gris sutil
         _toggleModeBtn.Pressed += ToggleAuthMode;
         formContainer.AddChild(_toggleModeBtn);
@@ -910,17 +961,17 @@ public partial class GridManager : TileMap
 
         if (_isLoginMode)
         {
-            _authTitleLabel.Text = "SISTEMA DE ENLACE: RECONEXIÓN";
+            _authTitleLabel.Text = "INICIAR SESION";
             _countrySelector.Hide(); // Escondemos la bandera
-            _submitAuthBtn.Text = "[ INICIAR SESIÓN ]";
-            _toggleModeBtn.Text = "¿Nuevo operativo? Crear Enlace";
+            _submitAuthBtn.Text = "INICIAR";
+            _toggleModeBtn.Text = "¿Eres Nuevo? Crear Cuenta";
         }
         else
         {
-            _authTitleLabel.Text = "SISTEMA DE ENLACE: NUEVO REGISTRO";
+            _authTitleLabel.Text = "REGISTRARSE";
             _countrySelector.Show(); // Mostramos la bandera
-            _submitAuthBtn.Text = "[ REGISTRAR NUEVO ENLACE ]";
-            _toggleModeBtn.Text = "¿Ya tienes un enlace? Iniciar Sesión";
+            _submitAuthBtn.Text = "CONFIRMAR REGISTRO";
+            _toggleModeBtn.Text = "¿Ya tienes un usuario? Iniciar Sesión";
         }
     }
 
@@ -1067,65 +1118,295 @@ public partial class GridManager : TileMap
 
         AddChild(_networkLayer);
 
-        // 5. Generar nuestro propio Nodo Central (Temporalmente en 0 todo)
-        GraphNode myNode = CreatePlayerNode("Root", _activePlayerNick, "🇺🇳", "Tú", 0, 0, 0, 0, new Vector2(100, 200));
-        _networkGraph.AddChild(myNode);
-
-        // 6. Solicitar los datos a Supabase
-        SupabaseManager.Instance.GetConnections(_activePlayerNick, (connectionsData) => 
+        // [NUEVA LÓGICA DURA] 1. Primero descargamos TUS propias estadísticas
+        SupabaseManager.Instance.GetPlayerStats(_activePlayerNick, (myStats) => 
         {
-            if (connectionsData != null && connectionsData.Count > 0)
+            int myBlocks = 0, myTierra = 0, myPiedra = 0, myPintura = 0;
+            string myCountry = "🇺🇳";
+
+            // Si la base de datos responde correctamente, extraemos tus datos reales
+            if (myStats != null)
             {
-                int yOffset = 50; 
-                int index = 0;
-
-                foreach (Godot.Collections.Dictionary recluta in connectionsData)
-                {
-                    string n = (string)recluta["nickname"];
-                    string c = (string)recluta["country"];
-                    
-                    // Extraemos los datos con seguridad matemática
-                    int blocks = recluta.ContainsKey("blocks_cleared") ? recluta["blocks_cleared"].AsInt32() : 0;
-                    int tierra = recluta.ContainsKey("tierra") ? recluta["tierra"].AsInt32() : 0;
-                    int piedra = recluta.ContainsKey("piedra") ? recluta["piedra"].AsInt32() : 0;
-                    int pintura = recluta.ContainsKey("pintura") ? recluta["pintura"].AsInt32() : 0;
-
-                    // Inyectamos todo en la fábrica de nodos
-                    GraphNode recruitNode = CreatePlayerNode($"Recruit_{index}", n, c, "Recluta", blocks, tierra, piedra, pintura, new Vector2(500, yOffset));
-                    
-                    _networkGraph.AddChild(recruitNode);
-                    _networkGraph.ConnectNode("Root", 0, $"Recruit_{index}", 0);
-
-                    yOffset += 150; 
-                    index++;
-                }
+                myCountry = myStats.ContainsKey("country") ? (string)myStats["country"] : "🇺🇳";
+                myBlocks = myStats.ContainsKey("blocks_cleared") ? myStats["blocks_cleared"].AsInt32() : 0;
+                myTierra = myStats.ContainsKey("tierra") ? myStats["tierra"].AsInt32() : 0;
+                myPiedra = myStats.ContainsKey("piedra") ? myStats["piedra"].AsInt32() : 0;
+                myPintura = myStats.ContainsKey("pintura") ? myStats["pintura"].AsInt32() : 0;
             }
+
+            // Generar TU Nodo Central con tu país y números reales
+            GraphNode myNode = CreatePlayerNode("Root", _activePlayerNick, myCountry, "Tú", myBlocks, myTierra, myPiedra, myPintura, new Vector2(100, 200));
+            _networkGraph.AddChild(myNode);
+
+            // 2. Inmediatamente después, descargamos la lista de tus RECLUTAS
+            SupabaseManager.Instance.GetConnections(_activePlayerNick, (connectionsData) => 
+            {
+                if (connectionsData != null && connectionsData.Count > 0)
+                {
+                    int yOffset = 50; 
+                    int index = 0;
+
+                    foreach (Godot.Collections.Dictionary recluta in connectionsData)
+                    {
+                        string n = (string)recluta["nickname"];
+                        string c = (string)recluta["country"];
+                        
+                        int blocks = recluta.ContainsKey("blocks_cleared") ? recluta["blocks_cleared"].AsInt32() : 0;
+                        int tierra = recluta.ContainsKey("tierra") ? recluta["tierra"].AsInt32() : 0;
+                        int piedra = recluta.ContainsKey("piedra") ? recluta["piedra"].AsInt32() : 0;
+                        int pintura = recluta.ContainsKey("pintura") ? recluta["pintura"].AsInt32() : 0;
+
+                        GraphNode recruitNode = CreatePlayerNode($"Recruit_{index}", n, c, "Recluta", blocks, tierra, piedra, pintura, new Vector2(500, yOffset));
+                        
+                        _networkGraph.AddChild(recruitNode);
+                        _networkGraph.ConnectNode("Root", 0, $"Recruit_{index}", 0);
+
+                        yOffset += 150; 
+                        index++;
+                    }
+                }
+            });
         });
     }
 
+    // Crea las "cajas" individuales que se conectan con los hilos
     // Crea las "cajas" individuales que se conectan con los hilos
     // Crea las "cajas" individuales que se conectan con los hilos
     private GraphNode CreatePlayerNode(string idName, string nick, string country, string rank, int blocks, int tierra, int piedra, int pintura, Vector2 position)
     {
         GraphNode node = new GraphNode();
         node.Name = idName;
-        node.Title = $"{country} {nick} [{rank}]";
-        node.PositionOffset = position; 
 
+        // 1. Título minimalista (Sin emojis que rompan Windows)
+        node.Title = $"[{rank}] {nick}";
+        node.PositionOffset = position; 
         node.SetSlot(0, true, 0, new Color(0.2f, 0.8f, 0.2f), true, 0, new Color(0.2f, 0.8f, 0.2f));
 
         VBoxContainer box = new VBoxContainer();
         box.Name = "DataContainer"; 
         node.AddChild(box);
 
-        // Inyectamos todas las estadísticas en tiempo real
+        // --- 2. MOTOR DE RENDERIZADO DE BANDERAS SVG ---
+        string isoCode = "un"; // Archivo por defecto (Naciones Unidas / Global)
+        string cleanCountry = "Otra / Global";
+
+        // Escaneamos la variable 'country' que viene de Supabase para hallar coincidencias
+        foreach (var pair in _countryToIso)
+        {
+            if (country.Contains(pair.Key))
+            {
+                isoCode = pair.Value; // Asignamos el código (ej. "ve")
+                cleanCountry = pair.Key; // Asignamos el nombre limpio ("Venezuela")
+                break;
+            }
+        }
+
+        // Construimos el contenedor horizontal para la bandera y el texto
+        HBoxContainer headerBox = new HBoxContainer();
+        headerBox.Alignment = BoxContainer.AlignmentMode.Begin; // <-- LÓGICA DURA CORREGIDA
+        headerBox.AddThemeConstantOverride("separation", 8);
+
+        TextureRect flagIcon = new TextureRect();
+        flagIcon.CustomMinimumSize = new Vector2(24, 24); // El tamaño 1x1 asegurado
+        flagIcon.ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize;
+        flagIcon.StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered;
+        
+        // Cargamos la imagen SVG desde los archivos. El 'ResourceLoader' evita que el juego crashee si falta un SVG.
+        string flagPath = $"res://UI/Flags/{isoCode}.svg";
+        if (ResourceLoader.Exists(flagPath))
+        {
+            flagIcon.Texture = GD.Load<Texture2D>(flagPath);
+        }
+
+        Label countryLabel = new Label();
+        countryLabel.Text = cleanCountry;
+        countryLabel.AddThemeColorOverride("font_color", new Color(0.9f, 0.9f, 0.9f));
+
+        headerBox.AddChild(flagIcon);
+        headerBox.AddChild(countryLabel);
+        box.AddChild(headerBox);
+
+        // Línea separadora tecnológica
+        HSeparator separator = new HSeparator();
+        separator.AddThemeConstantOverride("separation", 10);
+        box.AddChild(separator);
+
+        // 3. Estadísticas Base
         Label statsLabel = new Label();
         statsLabel.Name = "StatsLabel";
         statsLabel.Text = $"Bloques Totales: {blocks}\n[ Tierra: {tierra} | Piedra: {piedra} | Pintura: {pintura} ]";
         statsLabel.AddThemeColorOverride("font_color", new Color(0.7f, 0.7f, 0.7f));
-        
         box.AddChild(statsLabel);
 
         return node;
+    }
+
+    // =======================================================
+    // MOTOR DE OBJETIVOS Y MÉTRICAS (Lógica Dura)
+    // =======================================================
+
+    private void OpenObjectivesPanel()
+    {
+        CanvasLayer objLayer = new CanvasLayer { Layer = 95 }; // Por encima de casi todo
+
+        ColorRect bg = new ColorRect { Color = new Color(0.05f, 0.05f, 0.05f, 0.98f) };
+        bg.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        objLayer.AddChild(bg);
+
+        CenterContainer center = new CenterContainer();
+        center.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        bg.AddChild(center);
+
+        VBoxContainer box = new VBoxContainer { CustomMinimumSize = new Vector2(600, 500), Alignment = BoxContainer.AlignmentMode.Center };
+        box.AddThemeConstantOverride("separation", 25);
+        center.AddChild(box);
+
+        Label title = new Label { Text = "SISTEMA DE OBJETIVOS GLOBALES", HorizontalAlignment = HorizontalAlignment.Center };
+        title.AddThemeColorOverride("font_color", new Color(1.0f, 0.8f, 0.2f)); 
+        box.AddChild(title);
+
+        // --- CÁLCULO EN TIEMPO REAL ---
+        int totalTiles = GridSize.X * GridSize.Y;
+        
+        int ring0Max = GetRingTotal(0);
+        int ring0Cur = GetRingSealedCount(0);
+        
+        int ring1Max = GetRingTotal(1);
+        int ring1Cur = GetRingSealedCount(1);
+        
+        int currentDirt = 0;
+        int currentStone = 0;
+        
+        // Escaneo profundo del terreno
+        for (int x = 0; x < GridSize.X; x++) {
+            for (int y = 0; y < GridSize.Y; y++) {
+                TileType t = GetTileType(new Vector2I(x, y));
+                if (t == TileType.Dirt) currentDirt++;
+                else if (t == TileType.Stone) currentStone++;
+            }
+        }
+
+        // --- INYECCIÓN DE LAS 5 BARRAS ---
+        box.AddChild(CreateObjectiveBar("1. SELLAR ANILLO EXTERIOR (Inhibe aparición de Piedra)", ring0Cur, ring0Max, new Color(0.2f, 0.8f, 1.0f)));
+        box.AddChild(CreateObjectiveBar("2. SELLAR ANILLO INTERIOR (Inhibe aparición de Tierra)", ring1Cur, ring1Max, new Color(0.2f, 0.8f, 1.0f)));
+        box.AddChild(CreateObjectiveBar("3. LIMPIAR TODA LA TIERRA", totalTiles - currentDirt, totalTiles, new Color(0.6f, 0.4f, 0.2f)));
+        box.AddChild(CreateObjectiveBar("4. LIMPIAR TODA LA PIEDRA", totalTiles - currentStone, totalTiles, new Color(0.5f, 0.5f, 0.5f)));
+        box.AddChild(CreateObjectiveBar("5. PINTAR EL ECOSISTEMA (Cubrir todo el Lienzo)", _paintedPixels.Count, totalTiles, new Color(0.8f, 0.2f, 0.6f)));
+
+        Button btnClose = new Button { Text = "[ VOLVER AL TERRENO ]", CustomMinimumSize = new Vector2(250, 40), SizeFlagsHorizontal = Control.SizeFlags.ShrinkCenter };
+        btnClose.AddThemeColorOverride("font_color", new Color(0.9f, 0.2f, 0.2f));
+        btnClose.Pressed += () => objLayer.QueueFree();
+        box.AddChild(btnClose);
+
+        AddChild(objLayer);
+    }
+
+    private VBoxContainer CreateObjectiveBar(string title, int current, int max, Color fillColor)
+    {
+        VBoxContainer container = new VBoxContainer();
+        
+        Label lblTitle = new Label { Text = title };
+        container.AddChild(lblTitle);
+
+        ProgressBar bar = new ProgressBar { MaxValue = max, Value = current, CustomMinimumSize = new Vector2(650, 30), ShowPercentage = false };
+        StyleBoxFlat bgStyle = new StyleBoxFlat { BgColor = new Color(0.15f, 0.15f, 0.15f), CornerRadiusTopLeft = 4, CornerRadiusBottomRight = 4, CornerRadiusBottomLeft = 4, CornerRadiusTopRight = 4 };
+        StyleBoxFlat fillStyle = new StyleBoxFlat { BgColor = fillColor, CornerRadiusTopLeft = 4, CornerRadiusBottomRight = 4, CornerRadiusBottomLeft = 4, CornerRadiusTopRight = 4 };
+        
+        bar.AddThemeStyleboxOverride("background", bgStyle);
+        bar.AddThemeStyleboxOverride("fill", fillStyle);
+        
+        int missing = max - current;
+        Label lblStats = new Label { Text = $"Faltantes: {missing} / Completados: {current}", HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        lblStats.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        
+        bar.AddChild(lblStats);
+        container.AddChild(bar);
+        
+        return container;
+    }
+
+    // Fórmula matemática para saber cuántos bloques conforman el perímetro exacto de una capa
+    private int GetRingTotal(int layer)
+    {
+        int w = GridSize.X - (layer * 2);
+        int h = GridSize.Y - (layer * 2);
+        if (w <= 0 || h <= 0) return 0;
+        return (w * 2) + (h * 2) - 4; // Restamos 4 para no contar las esquinas dos veces
+    }
+
+    // Algoritmo vectorial para contar cuántos píxeles de un anillo perimetral ya están pintados
+    private int GetRingSealedCount(int layer)
+    {
+        int min = layer;
+        int maxX = GridSize.X - 1 - layer;
+        int maxY = GridSize.Y - 1 - layer;
+        int count = 0;
+
+        for (int x = min; x <= maxX; x++)
+        {
+            if (IsPixelSealed(new Vector2I(x, min))) count++;
+            if (IsPixelSealed(new Vector2I(x, maxY))) count++;
+        }
+        for (int y = min + 1; y < maxY; y++)
+        {
+            if (IsPixelSealed(new Vector2I(min, y))) count++;
+            if (IsPixelSealed(new Vector2I(maxX, y))) count++;
+        }
+        return count;
+    }
+
+    // =======================================================
+    // MOTOR DE JUICE (FEEDBACK AUDIOVISUAL)
+    // =======================================================
+    private void SpawnImpactEffects(Vector2I mapPos, ActionType action, string hexColor = null)
+    {
+        // 1. Convertir la coordenada vectorial del mapa a espacio global 2D en pantalla
+        Vector2 worldPos = MapToLocal(mapPos);
+
+        // 2. Ensamblar Sistema de Partículas Procedimental (VFX)
+        // [CORRECCIÓN APLICADA: CpuParticles2D con la capitalización exacta de Godot 4]
+        CpuParticles2D vfx = new CpuParticles2D();
+        vfx.Position = worldPos;
+        vfx.Emitting = true;
+        vfx.OneShot = true;
+        vfx.Explosiveness = 0.85f; // Estallido rápido y agresivo
+        vfx.Lifetime = 0.6f;
+        vfx.EmissionShape = CpuParticles2D.EmissionShapeEnum.Sphere;
+        vfx.EmissionSphereRadius = 8f;
+        vfx.Spread = 180f; // Dispersión en todas direcciones
+        vfx.Gravity = new Vector2(0, 150f); // Gravedad hacia abajo
+        vfx.InitialVelocityMin = 30f;
+        vfx.InitialVelocityMax = 80f;
+        vfx.ScaleAmountMin = 2f;
+        vfx.ScaleAmountMax = 4f;
+
+        // 3. Perfilado Estético (Material de los escombros)
+        if (action == ActionType.Pickaxe)
+        {
+            vfx.Color = new Color(0.6f, 0.6f, 0.6f); // Gris concreto
+            vfx.ScaleAmountMax = 6f; // Rocas más pesadas
+        }
+        else if (action == ActionType.Shovel)
+        {
+            vfx.Color = new Color(0.4f, 0.25f, 0.1f); // Marrón tierra
+            vfx.Amount = 16; // Más partículas para simular polvo
+        }
+        else if (action == ActionType.Paintbrush && hexColor != null)
+        {
+            vfx.Color = new Color(hexColor); // Salpicadura de pintura del color táctico elegido
+            vfx.Gravity = new Vector2(0, 50f); // La pintura es densa, cae más lento
+            vfx.InitialVelocityMax = 60f;
+        }
+
+        // Inyectar en el lienzo principal
+        AddChild(vfx);
+
+        // 4. Temporizador de Autodestrucción del Nodo (Gestión de Memoria)
+        GetTree().CreateTimer(1.0f).Timeout += () => 
+        {
+            if (IsInstanceValid(vfx)) vfx.QueueFree();
+        };
+
+        // --- SISTEMA DE AUDIO ---
     }
 }

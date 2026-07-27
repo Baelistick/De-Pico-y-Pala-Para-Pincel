@@ -226,6 +226,32 @@ public partial class SupabaseManager : Node
         request.Request(url, headers, HttpClient.Method.Get);
     }
 
+    public void IncrementUserStat(string nickname, string statType)
+    {
+        HttpRequest request = new HttpRequest();
+        AddChild(request);
+
+        request.RequestCompleted += (result, responseCode, headers, body) => 
+        {
+            if (responseCode != 200 && responseCode != 204)
+                GD.PrintErr($"[SUPABASE ERROR] Falla de telemetría al incrementar {statType}: {responseCode}");
+            
+            request.QueueFree();
+        };
+
+        // /rpc/ invoca Remote Procedure Calls en Supabase
+        string url = $"{_supabaseUrl}/rest/v1/rpc/incrementar_estadistica";
+        string[] headers = {
+            "apikey: " + _supabaseKey,
+            "Authorization: Bearer " + _supabaseKey,
+            "Content-Type: application/json"
+        };
+
+        // Construimos el JSON con los parámetros exactos que pide nuestra función SQL
+        string jsonBody = $"{{\"nick_jugador\": \"{nickname}\", \"tipo_bloque\": \"{statType}\"}}";
+        request.Request(url, headers, HttpClient.Method.Post, jsonBody);
+    }
+
     public void UpdatePlayerState(string playerId, string jsonBody)
     {
         HttpRequest request = new HttpRequest();
@@ -282,6 +308,50 @@ public partial class SupabaseManager : Node
         // Filtramos buscando filas donde 'invited_by' sea igual a tu nickname.
         // Solo traemos los datos que nos importan para ahorrar ancho de banda.
         string url = $"{_supabaseUrl}/rest/v1/usuarios?invited_by=eq.{myNickname}&select=nickname,country,blocks_cleared,tierra,piedra,pintura";
+        
+        string[] headers = {
+            "apikey: " + _supabaseKey,
+            "Authorization: Bearer " + _supabaseKey,
+            "Accept: application/json"
+        };
+
+        request.Request(url, headers, HttpClient.Method.Get);
+    }
+
+    // =======================================================
+    // ESCÁNER DE ESTADÍSTICAS PERSONALES
+    // =======================================================
+    public void GetPlayerStats(string nickname, System.Action<Godot.Collections.Dictionary> onCompleted)
+    {
+        HttpRequest request = new HttpRequest();
+        AddChild(request);
+
+        request.RequestCompleted += (result, responseCode, headers, body) => 
+        {
+            if (responseCode == 200)
+            {
+                Json json = new Json();
+                if (json.Parse(System.Text.Encoding.UTF8.GetString(body)) == Error.Ok)
+                {
+                    var array = json.Data.AsGodotArray();
+                    if (array.Count > 0)
+                    {
+                        // Devolvemos el primer (y único) perfil encontrado
+                        onCompleted?.Invoke(array[0].AsGodotDictionary());
+                    }
+                    else onCompleted?.Invoke(null);
+                }
+            }
+            else
+            {
+                GD.PrintErr($"[SUPABASE] Error obteniendo estadísticas de {nickname}: {responseCode}");
+                onCompleted?.Invoke(null);
+            }
+            request.QueueFree();
+        };
+
+        // Filtramos la tabla buscando coincidencia exacta con el Nickname
+        string url = $"{_supabaseUrl}/rest/v1/usuarios?nickname=eq.{nickname}&select=country,blocks_cleared,tierra,piedra,pintura";
         
         string[] headers = {
             "apikey: " + _supabaseKey,
