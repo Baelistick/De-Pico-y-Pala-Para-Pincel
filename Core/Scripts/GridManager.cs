@@ -4,6 +4,7 @@ using System.Collections.Generic;
 
 public partial class GridManager : TileMap
 {
+    private Timer _networkSyncTimer;
     // --- SISTEMA DE ENERGÍA Y RECARGA ---
     private int _currentActionPoints = 50; 
     private Label _actionPointsLabel;
@@ -39,6 +40,8 @@ public partial class GridManager : TileMap
     private LineEdit _nickInput;
     private LineEdit _passInput;
     private OptionButton _countrySelector;
+
+    private LineEdit _recruiterInput; // <--- NUEVA VARIABLE INYECTADA
     private bool _isPlayerAuthenticated = false;
 
     // --- MEMORIA DE JUGADOR ACTIVO ---
@@ -188,14 +191,57 @@ public partial class GridManager : TileMap
             }
             _paintOverlay.QueueRedraw();
         });
+
+        // RELOJ DE SINCRONIZACIÓN DE RED (RADAR)
+        _networkSyncTimer = new Timer();
+        _networkSyncTimer.WaitTime = 5.0f; // Escanea el mapa cada 5 segundos
+        _networkSyncTimer.Autostart = true;
+        _networkSyncTimer.Timeout += SyncMapData;
+        AddChild(_networkSyncTimer);
         
     }
 
     private void OnRechargeTick()
     {
-        _currentActionPoints++;
+        _currentActionPoints += 10;
         UpdateEnergyUI();
+        SupabaseManager.Instance.RecargarEnergia(_activePlayerNick, 10);
         GD.Print($"[ECOSISTEMA] Recarga completada. Puntos actuales: {_currentActionPoints}");
+    }
+
+    private void SyncMapData()
+    {
+        // El radar no funciona si el operativo no ha ingresado al ecosistema
+        if (!_isPlayerAuthenticated) return;
+
+        SupabaseManager.Instance.FetchAllPixels((serverData) => 
+        {
+            if (serverData == null) return; // Cortafuegos por si la red falla
+
+            foreach (var item in serverData)
+            {
+                var dict = item.AsGodotDictionary();
+                int x = (int)dict["x"];
+                int y = (int)dict["y"];
+                int type = (int)dict["tile_type"];
+                string hexColor = dict["hex_color"].AsString();
+                
+                Vector2I pos = new Vector2I(x, y);
+                
+                // Actualiza solo si hubo cambios reales en el terreno
+                if (GetTileType(pos) != (TileType)type)
+                {
+                    SetTile(pos, (TileType)type);
+                }
+
+                if (type == 0 && !string.IsNullOrEmpty(hexColor))
+                {
+                    _paintedPixels[pos] = new Color(hexColor);
+                }
+            }
+            // Fuerza la actualización visual de la pintura
+            _paintOverlay.QueueRedraw();
+        });
     }
 
     private void DrawCoordinatesOverlay()
@@ -293,41 +339,6 @@ public partial class GridManager : TileMap
         _btnOpenNetwork.AddThemeColorOverride("font_color", new Color(0.2f, 0.8f, 0.2f)); // Verde neón
         _btnOpenNetwork.Pressed += OpenReinforcementsNetwork;
 
-        // --- NUEVO: SISTEMA DE ENLACE (PORTAPAPELES) ---
-        Button btnCopyLink = new Button { Text = "🔗 COPIAR ENLACE", CustomMinimumSize = new Vector2(180, 40) };
-        btnCopyLink.AddThemeColorOverride("font_color", new Color(0.2f, 0.8f, 1.0f)); // Azul Neón (Cyberpunk)
-        
-        btnCopyLink.Pressed += () => 
-        {
-            // 1. Validamos que el operativo esté registrado
-            if (string.IsNullOrEmpty(_activePlayerNick))
-            {
-                GD.PrintErr("[SISTEMA] No hay un operativo activo para generar el enlace.");
-                return;
-            }
-
-            // 2. Construimos la URL con la Lógica Dura (Cambia "tujuego.com" por tu dominio final)
-            string refLink = $"https://tujuego.com/play?ref={_activePlayerNick}";
-            
-            // 3. Inyectamos el enlace directamente al portapapeles del Sistema Operativo
-            DisplayServer.ClipboardSet(refLink);
-            GD.Print($"[RED] Enlace copiado al portapapeles: {refLink}");
-
-            // 4. Feedback Visual Inmediato (Juice)
-            btnCopyLink.Text = "[ ¡COPIADO! ]";
-            btnCopyLink.AddThemeColorOverride("font_color", new Color(0.2f, 1.0f, 0.2f)); // Cambia a Verde
-
-            // 5. Motor de temporización para devolver el botón a la normalidad en 2 segundos
-            GetTree().CreateTimer(2.0f).Timeout += () => 
-            {
-                // Solo restauramos si el botón sigue existiendo en la memoria
-                if (IsInstanceValid(btnCopyLink)) 
-                {
-                    btnCopyLink.Text = "🔗 COPIAR ENLACE";
-                    btnCopyLink.AddThemeColorOverride("font_color", new Color(0.2f, 0.8f, 1.0f)); // Vuelve a Azul
-                }
-            };
-        };
 
         // Indicador de Energía
         _actionPointsLabel = new Label { Text = $"⚡ ENERGÍA: {_currentActionPoints} " };
@@ -343,7 +354,6 @@ public partial class GridManager : TileMap
         toolBar.AddChild(btnZoomIn);
         toolBar.AddChild(btnZoomOut);
         toolBar.AddChild(_btnOpenNetwork); // Inyectado de forma segura al final de la barra
-        toolBar.AddChild(btnCopyLink); // <--- INYECCIÓN AQUÍ
         toolBar.AddChild(btnObjectives); // <--- NUEVO BOTÓN AQUÍ
         
         hudLayer.AddChild(toolBar);
@@ -433,6 +443,9 @@ public partial class GridManager : TileMap
     // 5. GENERACIÓN ALEATORIA Y SISTEMA DE DEFENSAS (Lógica Dura)
     private void SpawnRandomDebris()
     {
+        // [CORTAFUEGOS INYECTADO] No generar si no hay un operativo conectado
+        if (!_isPlayerAuthenticated) return;
+
         // Evaluación Matemática de los Anillos Perimetrales
         bool isLayer1Sealed = CheckLayerSealed(0); // Anillo Exterior (Bloquea Roca)
         bool isLayer2Sealed = CheckLayerSealed(1); // Anillo Interior (Bloquea Tierra)
@@ -628,7 +641,8 @@ public partial class GridManager : TileMap
             {
                 _currentActionPoints--;
                 UpdateEnergyUI();
-                _rechargeTimer.Start(); // Reiniciamos el reloj para que no regale un punto gratis
+                SupabaseManager.Instance.ConsumirEnergia(_activePlayerNick); // <--- INYECCIÓN
+                _rechargeTimer.Start(); 
             }
         }
     }
@@ -940,6 +954,10 @@ public partial class GridManager : TileMap
 
         formContainer.AddChild(_countrySelector);
 
+        // --- NUEVA INYECCIÓN: CAMPO DEL RECLUTADOR ---
+        _recruiterInput = new LineEdit { PlaceholderText = "¿QUIÉN TE INVITÓ? (Opcional)", Alignment = HorizontalAlignment.Center };
+        formContainer.AddChild(_recruiterInput);
+
         // Botón Principal
         _submitAuthBtn = new Button { Text = "CONFIRMAR REGISTRO", CustomMinimumSize = new Vector2(0, 50) };
         _submitAuthBtn.Pressed += ProcessLoginAttempt;
@@ -963,6 +981,7 @@ public partial class GridManager : TileMap
         {
             _authTitleLabel.Text = "INICIAR SESION";
             _countrySelector.Hide(); // Escondemos la bandera
+            _recruiterInput.Hide();  // <--- OCULTAMOS EL CAMPO DE INVITACIÓN
             _submitAuthBtn.Text = "INICIAR";
             _toggleModeBtn.Text = "¿Eres Nuevo? Crear Cuenta";
         }
@@ -970,6 +989,7 @@ public partial class GridManager : TileMap
         {
             _authTitleLabel.Text = "REGISTRARSE";
             _countrySelector.Show(); // Mostramos la bandera
+            _recruiterInput.Show();  // <--- MOSTRAMOS EL CAMPO DE INVITACIÓN
             _submitAuthBtn.Text = "CONFIRMAR REGISTRO";
             _toggleModeBtn.Text = "¿Ya tienes un usuario? Iniciar Sesión";
         }
@@ -986,10 +1006,8 @@ public partial class GridManager : TileMap
             return;
         }
 
-        // 1. Ciframos la contraseña localmente
         string safePasswordHash = HashPassword(pass);
 
-        // 2. Apagamos el botón momentáneamente para evitar que el usuario haga spam de clics
         _submitAuthBtn.Disabled = true;
         _toggleModeBtn.Disabled = true;
         _submitAuthBtn.Text = "ESTABLECIENDO ENLACE...";
@@ -997,14 +1015,25 @@ public partial class GridManager : TileMap
         if (_isLoginMode)
         {
             GD.Print($"[RED] Solicitando reconexión a base de datos. Nick: {nick}");
-            // Enviamos los datos y la orden de qué hacer al recibir la respuesta
             SupabaseManager.Instance.LoginUser(nick, safePasswordHash, OnAuthenticationResult);
         }
         else
         {
             string country = _countrySelector.GetItemText(_countrySelector.Selected);
-            GD.Print($"[RED] Solicitando creación de usuario. Nick: {nick} | País: {country}");
-            SupabaseManager.Instance.RegisterNewUser(nick, safePasswordHash, country, OnAuthenticationResult);
+            string recruiter = _recruiterInput.Text.Trim(); // <--- CAPTURA DEL TEXTO
+
+            // INYECCIÓN DE LAMBDA PARA EVALUAR EL BONO
+            SupabaseManager.Instance.RegisterNewUser(nick, safePasswordHash, country, recruiter, (success) => 
+            {
+                if (success && !string.IsNullOrEmpty(recruiter))
+                {
+                    SupabaseManager.Instance.ActivarBonoNodo(recruiter);
+                    _currentActionPoints += 50; // Reflejo visual inmediato
+                }
+                OnAuthenticationResult(success);
+            });
+
+            GD.Print($"[RED] Registro. Nick: {nick} | País: {country} | Reclutador: {(string.IsNullOrEmpty(recruiter) ? "Ninguno" : recruiter)}");
         }
     }
 
@@ -1037,6 +1066,14 @@ public partial class GridManager : TileMap
                 else
                 {
                     GD.Print("[RED] Escáner completado: Aún no tienes conexiones en tu red.");
+                }
+            });
+            SupabaseManager.Instance.GetPlayerStats(_activePlayerNick, (myStats) => 
+            {
+                if (myStats != null && myStats.ContainsKey("action_points"))
+                {
+                    _currentActionPoints = myStats["action_points"].AsInt32();
+                    UpdateEnergyUI();
                 }
             });
         }
@@ -1096,6 +1133,9 @@ public partial class GridManager : TileMap
 
     private void OpenReinforcementsNetwork()
     {
+        // [NUEVO CORTAFUEGOS] Si el panel ya está abierto, ignorar el clic
+        if (_networkLayer != null && IsInstanceValid(_networkLayer)) return;
+
         _networkLayer = new CanvasLayer();
         _networkLayer.Layer = 90; 
 
@@ -1121,6 +1161,9 @@ public partial class GridManager : TileMap
         // [NUEVA LÓGICA DURA] 1. Primero descargamos TUS propias estadísticas
         SupabaseManager.Instance.GetPlayerStats(_activePlayerNick, (myStats) => 
         {
+            // [NUEVO CORTAFUEGOS] Si el jugador cerró el panel antes de que llegara la respuesta, abortar.
+            if (!IsInstanceValid(_networkGraph)) return;
+
             int myBlocks = 0, myTierra = 0, myPiedra = 0, myPintura = 0;
             string myCountry = "🇺🇳";
 
@@ -1141,6 +1184,9 @@ public partial class GridManager : TileMap
             // 2. Inmediatamente después, descargamos la lista de tus RECLUTAS
             SupabaseManager.Instance.GetConnections(_activePlayerNick, (connectionsData) => 
             {
+                // [NUEVO CORTAFUEGOS] Verificación vital secundaria
+                if (!IsInstanceValid(_networkGraph)) return;
+
                 if (connectionsData != null && connectionsData.Count > 0)
                 {
                     int yOffset = 50; 

@@ -47,7 +47,7 @@ sources/0 = SubResource("TileSetAtlasSource_rlx2o")
 tile_set = SubResource("TileSet_ri6rb")
 format = 2
 script = ExtResource("2_fi62q")
-GridSize = Vector2i(150, 150)
+GridSize = Vector2i(100, 100)
 
 [node name="Camera2D" type="Camera2D" parent="." unique_id=893856645]
 anchor_mode = 0
