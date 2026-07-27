@@ -34,6 +34,10 @@ public partial class GridManager : TileMap
     private Godot.GraphEdit _networkGraph;
     private Button _btnOpenNetwork;
 
+    // --- SISTEMA DE PUNTUACIONES (TOP GLOBAL) ---
+    private CanvasLayer _leaderboardLayer;
+    private HBoxContainer _leaderboardColumnsContainer;
+
     // --- BARRERA DE AUTENTICACIÓN (Lógica Dura) ---
     private CanvasLayer _authLayer;
     private Control _authScreen;
@@ -70,6 +74,11 @@ public partial class GridManager : TileMap
     [Export] public Vector2I GridSize = new Vector2I(50, 50);
     
     private const int TILESET_SOURCE_ID = 0;
+
+    // --- MEMORIA DE NOTIFICACIONES ---
+    private bool _wasRing1Sealed = false;
+    private bool _wasRing2Sealed = false;
+    private float _lastKnownDonationAmount = -1f;
     
     // Bypass Espacial
     private readonly Vector2I ATLAS_CANVAS = new Vector2I(0, 0); 
@@ -163,6 +172,8 @@ public partial class GridManager : TileMap
         // Inicializar Capa de Coordenadas Tácticas
         _coordinateOverlay = new Node2D();
         _coordinateOverlay.ZIndex = 5; // Se dibuja por encima de las baldosas
+        // --- INYECCIÓN DE ALTA DENSIDAD ---
+        _coordinateOverlay.Scale = new Vector2(0.2f, 0.2f); // La encogemos a una quinta parte
         AddChild(_coordinateOverlay);
         _coordinateOverlay.Draw += DrawCoordinatesOverlay;
         
@@ -170,7 +181,8 @@ public partial class GridManager : TileMap
         AddChild(_devCamera);
         _devCamera.MakeCurrent();
 
-        InitializeAuthUI();
+        // Intercepción del flujo: Primero mostramos la tarjeta benéfica
+        InitializeWelcomeUI();
 
         // [DESBLOQUEO TÁCTICO] 
         // Descomenta esto SOLO cuando hayas limpiado tu base de datos (TRUNCATE TABLE pixels)
@@ -203,6 +215,79 @@ public partial class GridManager : TileMap
         _networkSyncTimer.Timeout += SyncMapData;
         AddChild(_networkSyncTimer);
         
+    }
+
+    private void InitializeWelcomeUI()
+    {
+        CanvasLayer welcomeLayer = new CanvasLayer { Layer = 150 }; // Capa absoluta suprema
+
+        // Fondo oscuro para aislar la atención del jugador
+        ColorRect bgDark = new ColorRect { Color = new Color(0.02f, 0.02f, 0.02f, 0.95f) };
+        bgDark.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        welcomeLayer.AddChild(bgDark);
+
+        CenterContainer center = new CenterContainer();
+        center.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        bgDark.AddChild(center);
+
+        // Contenedor principal de la tarjeta
+        VBoxContainer cardBox = new VBoxContainer { CustomMinimumSize = new Vector2(700, 400), Alignment = BoxContainer.AlignmentMode.Center };
+        cardBox.AddThemeConstantOverride("separation", 25);
+        center.AddChild(cardBox);
+
+        // TÍTULO
+        Label title = new Label { Text = "¡Bienvenido a Pico, Pala y Pincel!", HorizontalAlignment = HorizontalAlignment.Center };
+        title.AddThemeFontSizeOverride("font_size", 32);
+        title.AddThemeColorOverride("font_color", new Color(1.0f, 0.8f, 0.2f)); // Amarillo brillante
+        cardBox.AddChild(title);
+
+        // TEXTO BENÉFICO
+        Label body1 = new Label { 
+            Text = "Este es un juego Benéfico en Apoyo a los Afectados el 24 de Julio de 2026 en Venezuela. Compartir el juego con tus amigos ya es un enorme apoyo a esta noble causa. ¡Gracias por llegar hasta aquí de todo corazón! ❤", 
+            HorizontalAlignment = HorizontalAlignment.Center, 
+            AutowrapMode = TextServer.AutowrapMode.Word 
+        };
+        body1.AddThemeColorOverride("font_color", new Color(0.9f, 0.9f, 0.9f));
+        cardBox.AddChild(body1);
+
+        // SEPARADOR TÁCTICO
+        HSeparator sep1 = new HSeparator();
+        cardBox.AddChild(sep1);
+
+        // CONTROLES
+        Label body2 = new Label { 
+            Text = "⛏ Con Pico (1) Quitas la Piedra\n⚒ Con Pala (2) Remueves Tierra\n🖌 Con Pincel (3) Pintas Casilla", 
+            HorizontalAlignment = HorizontalAlignment.Center 
+        };
+        body2.AddThemeColorOverride("font_color", new Color(0.2f, 0.8f, 1.0f)); // Azul táctico
+        cardBox.AddChild(body2);
+
+        // SEPARADOR TÁCTICO
+        HSeparator sep2 = new HSeparator();
+        cardBox.AddChild(sep2);
+
+        // OBJETIVO FINAL
+        Label body3 = new Label { 
+            Text = "Coordina a tus amigos para hacer un dibujo, mensaje o ayudar a remover los escombros es una gran ayuda. Al terminar todos los objetivos el lienzo completo será publicado para descargar y compartir, demostrándole al mundo lo unidos que podemos estar cuando es necesario estar Juntos en los momentos más complicados.", 
+            HorizontalAlignment = HorizontalAlignment.Center, 
+            AutowrapMode = TextServer.AutowrapMode.Word 
+        };
+        body3.AddThemeColorOverride("font_color", new Color(0.8f, 0.8f, 0.8f));
+        cardBox.AddChild(body3);
+
+        // BOTÓN DE CONTINUAR (El detonador de la Auth UI)
+        Button btnContinue = new Button { Text = "ENTENDIDO - CONTINUAR", CustomMinimumSize = new Vector2(300, 50), SizeFlagsHorizontal = Control.SizeFlags.ShrinkCenter };
+        btnContinue.AddThemeColorOverride("font_color", new Color(0.2f, 0.9f, 0.4f)); // Verde para avanzar
+        
+        btnContinue.Pressed += () => 
+        {
+            welcomeLayer.QueueFree(); // Destruye la tarjeta
+            InitializeAuthUI();       // Invoca la pantalla de registro
+        };
+        
+        cardBox.AddChild(btnContinue);
+
+        AddChild(welcomeLayer);
     }
 
     private void OnRechargeTick()
@@ -259,8 +344,18 @@ public partial class GridManager : TileMap
                 if (serverEnergy >= _currentActionPoints + 40) 
                 {
                     GD.Print("[RED] ¡NUEVO RECLUTA DETECTADO! Bono de energía recibido en tiempo real.");
+                    // --- NUEVO: DISPARADOR DE RECLUTA ---
+                    ShowFloatingMessage("¡NUEVO RECLUTA SE HA UNIDO! +50 Energía", new Color(0.2f, 0.8f, 1.0f));
                     _currentActionPoints = serverEnergy;
                     UpdateEnergyUI();
+
+                    // --- INYECCIÓN EN TIEMPO REAL ---
+                    // Si el panel de red está abierto en este instante, ordénale redibujar toda la malla
+                    if (_networkLayer != null && IsInstanceValid(_networkLayer)) RefreshNetworkGraph();
+
+                    // --- INYECCIÓN EN TIEMPO REAL: PUNTUACIONES ---
+                    // Si el panel de Puntuaciones está abierto, descarga y reordena los nuevos datos
+                    if (_leaderboardLayer != null && IsInstanceValid(_leaderboardLayer)) RefreshLeaderboardData();
                 }
             }
         });
@@ -268,30 +363,32 @@ public partial class GridManager : TileMap
 
     private void DrawCoordinatesOverlay()
     {
-        // Extraemos la fuente por defecto del motor
         Font defaultFont = ThemeDB.FallbackFont;
-        int fontSize = 8; // Tamaño microscópico relativo al zoom
-        Color textColor = new Color(1.0f, 1.0f, 1.0f, 0.4f); // Blanco al 40% de opacidad
+        
+        // 1. Aumentamos la resolución nativa de la fuente x5
+        int fontSize = 25; 
+        float densityMultiplier = 5.0f; // Compensador matemático
+        
+        Color textColor = new Color(0.0f, 0.0f, 0.0f, 0.95f);
+        Color outlineColor = new Color(1.0f, 1.0f, 1.0f, 0.8f); 
+        
+        // 2. Aumentamos también el grosor del borde en la misma proporción x5
+        int outlineSize = 10; 
 
         for (int x = 0; x < GridSize.X; x++)
         {
             string colName = GetColumnName(x);
             for (int y = 0; y < GridSize.Y; y++)
             {
-                // Nombre de la casilla (Ej: "A1", "C14")
-                // Le sumamos 1 a 'y' para que empiece en 1 y no en 0
                 string coordText = $"{colName}{y + 1}"; 
-
-                // Buscamos el centro exacto de la baldosa en el espacio 2D
                 Vector2 tileCenter = MapToLocal(new Vector2I(x, y));
 
-                // Calculamos el tamaño del texto para poder centrarlo matemáticamente
                 Vector2 stringSize = defaultFont.GetStringSize(coordText, HorizontalAlignment.Left, -1, fontSize);
                 
-                // Aplicamos un offset para que el texto quede en el medio de la casilla
-                Vector2 drawPos = tileCenter + new Vector2(-stringSize.X / 2, stringSize.Y / 3);
+                // 3. Multiplicamos la posición espacial por la densidad para que encaje perfecto
+                Vector2 drawPos = (tileCenter * densityMultiplier) + new Vector2(-stringSize.X / 2, stringSize.Y / 3);
                 
-                // Estampamos el texto en el lienzo
+                _coordinateOverlay.DrawStringOutline(defaultFont, drawPos, coordText, HorizontalAlignment.Left, -1, fontSize, outlineSize, outlineColor);
                 _coordinateOverlay.DrawString(defaultFont, drawPos, coordText, HorizontalAlignment.Left, -1, fontSize, textColor);
             }
         }
@@ -356,6 +453,27 @@ public partial class GridManager : TileMap
         btnZoomIn.Pressed += () => AdjustZoom(1.2f); // Aumenta el zoom un 20%
         btnZoomOut.Pressed += () => AdjustZoom(0.8f); // Reduce el zoom un 20%
 
+        // --- INYECCIÓN: INTERRUPTOR DE COORDENADAS ---
+        Button btnToggleCords = new Button { Text = "#️⃣ +/-", CustomMinimumSize = new Vector2(70, 40) };
+        btnToggleCords.AddThemeColorOverride("font_color", new Color(0.8f, 0.8f, 0.8f)); // Color por defecto
+
+        // --- INYECCIÓN: BOTÓN DE PUNTUACIONES ---
+        Button btnLeaderboard = new Button { Text = "🏆 TOP GLOBAL", CustomMinimumSize = new Vector2(150, 40) };
+        btnLeaderboard.AddThemeColorOverride("font_color", new Color(1.0f, 0.8f, 0.2f)); // Amarillo Neón
+        btnLeaderboard.Pressed += OpenLeaderboardPanel;
+        
+        // Conectamos el clic para invertir la visibilidad (Si es true, la hace false. Si es false, la hace true)
+        btnToggleCords.Pressed += () => 
+        {
+            _coordinateOverlay.Visible = !_coordinateOverlay.Visible;
+            
+            // Retroalimentación visual: El botón se oscurece si las apagas, y se ilumina si las enciendes
+            if (_coordinateOverlay.Visible)
+                btnToggleCords.AddThemeColorOverride("font_color", new Color(0.8f, 0.8f, 0.8f));
+            else
+                btnToggleCords.AddThemeColorOverride("font_color", new Color(0.4f, 0.4f, 0.4f)); 
+        };
+
         // --- NUEVO: Botón de Red de Conexiones ---
         _btnOpenNetwork = new Button { Text = "[ MIS REFUERZOS ]", CustomMinimumSize = new Vector2(200, 40) };
         _btnOpenNetwork.AddThemeColorOverride("font_color", new Color(0.2f, 0.8f, 0.2f)); // Verde neón
@@ -375,6 +493,8 @@ public partial class GridManager : TileMap
         toolBar.AddChild(colorPicker);
         toolBar.AddChild(btnZoomIn);
         toolBar.AddChild(btnZoomOut);
+        toolBar.AddChild(btnToggleCords); // <--- INYECTADO AQUÍ
+        toolBar.AddChild(btnLeaderboard); // <--- AÑADIR AQUÍ
         toolBar.AddChild(_btnOpenNetwork); // Inyectado de forma segura al final de la barra
         toolBar.AddChild(btnObjectives); // <--- NUEVO BOTÓN AQUÍ
         
@@ -416,7 +536,25 @@ public partial class GridManager : TileMap
         _donationProgressBar.AddChild(donationLabel);
 
         topBarsContainer.AddChild(_cleanProgressBar);
-        topBarsContainer.AddChild(_donationProgressBar);
+
+        // --- INYECCIÓN DEL BOTÓN DE DONACIÓN ---
+        // Creamos un contenedor horizontal para que la barra y el botón estén lado a lado
+        HBoxContainer donationContainer = new HBoxContainer();
+        donationContainer.Alignment = BoxContainer.AlignmentMode.Center;
+        donationContainer.AddThemeConstantOverride("separation", 15);
+        
+        donationContainer.AddChild(_donationProgressBar); // Metemos la barra existente
+
+        // Creamos el botón con un rojo sutil / coral para llamar la atención
+        Button btnDonate = new Button { Text = "❤️ DONAR", CustomMinimumSize = new Vector2(180, 30) };
+        btnDonate.AddThemeColorOverride("font_color", new Color(1.0f, 0.4f, 0.4f)); 
+        
+        // El comando OS.ShellOpen le ordena al sistema operativo abrir el navegador web por defecto
+        btnDonate.Pressed += () => OS.ShellOpen("https://tiltify.com/@baelistick/global-game-jam-venezuela-earthquake-relief-fundraiser?origin=dashboard"); // <-- REEMPLAZA CON EL LINK PÚBLICO DE TU CAMPAÑA
+        
+        donationContainer.AddChild(btnDonate); // Metemos el botón al lado de la barra
+        
+        topBarsContainer.AddChild(donationContainer); // Finalmente, añadimos el bloque completo al HUD
         hudLayer.AddChild(topBarsContainer);
 
         AddChild(hudLayer);
@@ -471,6 +609,19 @@ public partial class GridManager : TileMap
         // Evaluación Matemática de los Anillos Perimetrales
         bool isLayer1Sealed = CheckLayerSealed(0); // Anillo Exterior (Bloquea Roca)
         bool isLayer2Sealed = CheckLayerSealed(1); // Anillo Interior (Bloquea Tierra)
+
+        // --- NUEVO: DISPARADOR DE ANILLOS (VERDE NEÓN) ---
+        if (isLayer1Sealed && !_wasRing1Sealed)
+        {
+            _wasRing1Sealed = true;
+            ShowFloatingMessage("¡ANILLO 1 SELLADO! Invasión de Piedra Bloqueada.", new Color(0.2f, 0.9f, 0.2f));
+        }
+        if (isLayer2Sealed && !_wasRing2Sealed)
+        {
+            _wasRing2Sealed = true;
+            // Para el anillo 2, podemos usar un Verde Cian para diferenciarlo un poco, o dejarlo igual
+            ShowFloatingMessage("¡ANILLO 2 SELLADO! Invasión de Tierra Bloqueada.", new Color(0.0f, 0.8f, 0.6f));
+        }
 
         if (isLayer1Sealed && isLayer2Sealed)
         {
@@ -682,6 +833,19 @@ public partial class GridManager : TileMap
                 // Refrescamos la memoria de la posición para el siguiente fotograma
                 _lastMousePosition = mouseMotionEvent.Position;
             }
+        }
+
+        // --- INYECCIÓN: LÓGICA DURA DE NAVEGACIÓN TÁCTIL ---
+        if (@event is InputEventScreenDrag dragEvent)
+        {
+            // Si la cámara es válida, invertimos el vector de arrastre para simular "agarrar" el terreno
+            if (_devCamera != null)
+            {
+                // Multiplicamos por la inversa del zoom para que el arrastre se sienta proporcional
+                // sin importar si estás muy cerca o muy lejos del mapa
+                _devCamera.Position -= dragEvent.Relative * (1.0f / _devCamera.Zoom.X);
+            }
+            return; // Cortamos la ejecución para no procesar otras entradas
         }
     }
 
@@ -904,6 +1068,14 @@ public partial class GridManager : TileMap
 
                 float amountRaised = amountRaisedObj["value"].AsSingle();
                 float goal = goalObj["value"].AsSingle();
+
+                // --- NUEVO: DISPARADOR DE DONACIÓN ---
+                if (_lastKnownDonationAmount != -1f && amountRaised > _lastKnownDonationAmount)
+                {
+                    float difference = amountRaised - _lastKnownDonationAmount;
+                    ShowFloatingMessage($"¡DONATIVO RECIBIDO! (+ ${difference:N0}) ¡El mundo esta con Venezuela 🇻🇪!", new Color(0.2f, 0.9f, 0.4f));
+                }
+                _lastKnownDonationAmount = amountRaised; // Guardamos el nuevo valor en la memoria
 
                 // Actualizamos nuestra interfaz vectorial
                 if (_donationProgressBar != null)
@@ -1189,20 +1361,16 @@ public partial class GridManager : TileMap
 
     private void OpenReinforcementsNetwork()
     {
-        // [NUEVO CORTAFUEGOS] Si el panel ya está abierto, ignorar el clic
         if (_networkLayer != null && IsInstanceValid(_networkLayer)) return;
 
-        _networkLayer = new CanvasLayer();
-        _networkLayer.Layer = 90; 
+        _networkLayer = new CanvasLayer { Layer = 90 }; 
 
         ColorRect bg = new ColorRect { Color = new Color(0.08f, 0.08f, 0.1f, 0.98f) };
         bg.SetAnchorsPreset(Control.LayoutPreset.FullRect);
         _networkLayer.AddChild(bg);
 
-        _networkGraph = new Godot.GraphEdit();
+        _networkGraph = new Godot.GraphEdit { RightDisconnects = false, ConnectionLinesCurvature = 0.5f };
         _networkGraph.SetAnchorsPreset(Control.LayoutPreset.FullRect);
-        _networkGraph.RightDisconnects = false; 
-        _networkGraph.ConnectionLinesCurvature = 0.5f; 
         _networkLayer.AddChild(_networkGraph);
 
         Button btnClose = new Button { Text = "[ X ] CERRAR RED", CustomMinimumSize = new Vector2(150, 40) };
@@ -1214,61 +1382,102 @@ public partial class GridManager : TileMap
 
         AddChild(_networkLayer);
 
-        // [NUEVA LÓGICA DURA] 1. Primero descargamos TUS propias estadísticas
-        SupabaseManager.Instance.GetPlayerStats(_activePlayerNick, (myStats) => 
+        // Disparamos la generación de la red
+        RefreshNetworkGraph();
+    }
+
+    private void RefreshNetworkGraph()
+    {
+        if (_networkGraph == null || !IsInstanceValid(_networkGraph)) return;
+
+        // Limpiamos la pantalla por si es una actualización en tiempo real
+        foreach (Node child in _networkGraph.GetChildren()) { if (child is GraphNode) child.QueueFree(); }
+        _networkGraph.ClearConnections();
+
+        SupabaseManager.Instance.GetAllUsersForNetwork((allUsers) => 
         {
-            // [NUEVO CORTAFUEGOS] Si el jugador cerró el panel antes de que llegara la respuesta, abortar.
-            if (!IsInstanceValid(_networkGraph)) return;
-
-            int myBlocks = 0, myTierra = 0, myPiedra = 0, myPintura = 0;
-            string myCountry = "🇺🇳";
-
-            // Si la base de datos responde correctamente, extraemos tus datos reales
-            if (myStats != null)
+            if (!IsInstanceValid(_networkGraph) || allUsers == null) return;
+            
+            // 1. Convertimos la lista en un Diccionario Rápido para buscar por Nickname
+            Dictionary<string, Godot.Collections.Dictionary> userMap = new Dictionary<string, Godot.Collections.Dictionary>();
+            foreach (var u in allUsers)
             {
-                myCountry = myStats.ContainsKey("country") ? (string)myStats["country"] : "🇺🇳";
-                myBlocks = myStats.ContainsKey("blocks_cleared") ? myStats["blocks_cleared"].AsInt32() : 0;
-                myTierra = myStats.ContainsKey("tierra") ? myStats["tierra"].AsInt32() : 0;
-                myPiedra = myStats.ContainsKey("piedra") ? myStats["piedra"].AsInt32() : 0;
-                myPintura = myStats.ContainsKey("pintura") ? myStats["pintura"].AsInt32() : 0;
+                var dict = u.AsGodotDictionary();
+                userMap[dict["nickname"].AsString()] = dict;
             }
 
-            // Generar TU Nodo Central con tu país y números reales
-            GraphNode myNode = CreatePlayerNode("Root", _activePlayerNick, myCountry, "Tú", myBlocks, myTierra, myPiedra, myPintura, new Vector2(100, 200));
-            _networkGraph.AddChild(myNode);
+            if (!userMap.ContainsKey(_activePlayerNick)) return;
+            
+            var myData = userMap[_activePlayerNick];
+            string myParentNick = myData.ContainsKey("invited_by") ? myData["invited_by"].AsString() : "";
+            int currentY = 50;
 
-            // 2. Inmediatamente después, descargamos la lista de tus RECLUTAS
-            SupabaseManager.Instance.GetConnections(_activePlayerNick, (connectionsData) => 
+            string mySafeName = _activePlayerNick.Replace(" ", ""); // Evita errores visuales en las líneas del Graph
+
+            // 2. ¿Tenemos un Reclutador (Padre)? Si es así, lo dibujamos arriba.
+            if (!string.IsNullOrEmpty(myParentNick) && userMap.ContainsKey(myParentNick))
             {
-                // [NUEVO CORTAFUEGOS] Verificación vital secundaria
-                if (!IsInstanceValid(_networkGraph)) return;
+                string safeParentName = myParentNick.Replace(" ", "");
+                DrawNodeFromData(userMap[myParentNick], safeParentName, myParentNick, "Jefe de Nodo", new Vector2(100, currentY));
+                
+                DrawNodeFromData(myData, mySafeName, _activePlayerNick, "Tú", new Vector2(500, currentY));
+                _networkGraph.ConnectNode(safeParentName, 0, mySafeName, 0);
+            }
+            else
+            {
+                // Si no fuimos invitados por nadie, somos la raíz pura
+                DrawNodeFromData(myData, mySafeName, _activePlayerNick, "Tú (Nodo Raíz)", new Vector2(100, currentY));
+            }
 
-                if (connectionsData != null && connectionsData.Count > 0)
-                {
-                    int yOffset = 50; 
-                    int index = 0;
-
-                    foreach (Godot.Collections.Dictionary recluta in connectionsData)
-                    {
-                        string n = (string)recluta["nickname"];
-                        string c = (string)recluta["country"];
-                        
-                        int blocks = recluta.ContainsKey("blocks_cleared") ? recluta["blocks_cleared"].AsInt32() : 0;
-                        int tierra = recluta.ContainsKey("tierra") ? recluta["tierra"].AsInt32() : 0;
-                        int piedra = recluta.ContainsKey("piedra") ? recluta["piedra"].AsInt32() : 0;
-                        int pintura = recluta.ContainsKey("pintura") ? recluta["pintura"].AsInt32() : 0;
-
-                        GraphNode recruitNode = CreatePlayerNode($"Recruit_{index}", n, c, "Recluta", blocks, tierra, piedra, pintura, new Vector2(500, yOffset));
-                        
-                        _networkGraph.AddChild(recruitNode);
-                        _networkGraph.ConnectNode("Root", 0, $"Recruit_{index}", 0);
-
-                        yOffset += 150; 
-                        index++;
-                    }
-                }
-            });
+            // 3. Disparamos la recursividad fractal para dibujar a nuestros Hijos, Nietos, etc.
+            DrawFractalChildren(userMap, _activePlayerNick, mySafeName, currentY + 200);
         });
+    }
+
+    // El Algoritmo Fractal (Lógica Dura)
+    private int DrawFractalChildren(Dictionary<string, Godot.Collections.Dictionary> userMap, string targetNick, string safeTargetName, int startY)
+    {
+        int currentY = startY;
+        
+        foreach (var kvp in userMap)
+        {
+            string childNick = kvp.Key;
+            var childData = kvp.Value;
+            string recruiter = childData.ContainsKey("invited_by") ? childData["invited_by"].AsString() : "";
+
+            if (recruiter == targetNick)
+            {
+                string safeChildName = childNick.Replace(" ", "");
+                
+                // Buscamos la posición X de nuestro padre para dibujarnos a su derecha
+                GraphNode parentNode = _networkGraph.GetNodeOrNull<GraphNode>(safeTargetName);
+                float parentX = parentNode != null ? parentNode.PositionOffset.X : 100;
+                
+                Vector2 childPos = new Vector2(parentX + 400, currentY);
+                DrawNodeFromData(childData, safeChildName, childNick, "Recluta", childPos);
+                
+                _networkGraph.ConnectNode(safeTargetName, 0, safeChildName, 0);
+                
+                // ¡AUTO-LLAMADA! El algoritmo entra dentro del hijo para buscarle sus propios reclutas
+                int nextY = DrawFractalChildren(userMap, childNick, safeChildName, currentY);
+                
+                // Desplazamos el eje Y para que el siguiente hermano no se dibuje encima
+                currentY = nextY > currentY ? nextY : currentY + 160;
+            }
+        }
+        return currentY;
+    }
+
+    private void DrawNodeFromData(Godot.Collections.Dictionary data, string safeName, string realNick, string rank, Vector2 pos)
+    {
+        string c = data.ContainsKey("country") ? data["country"].AsString() : "🇺🇳";
+        int blocks = data.ContainsKey("blocks_cleared") ? data["blocks_cleared"].AsInt32() : 0;
+        int t = data.ContainsKey("tierra") ? data["tierra"].AsInt32() : 0;
+        int p = data.ContainsKey("piedra") ? data["piedra"].AsInt32() : 0;
+        int pt = data.ContainsKey("pintura") ? data["pintura"].AsInt32() : 0;
+
+        GraphNode node = CreatePlayerNode(safeName, realNick, c, rank, blocks, t, p, pt, pos);
+        _networkGraph.AddChild(node);
     }
 
     // Crea las "cajas" individuales que se conectan con los hilos
@@ -1510,5 +1719,169 @@ public partial class GridManager : TileMap
         };
 
         // --- SISTEMA DE AUDIO ---
+    }
+
+    private void ShowFloatingMessage(string text, Color color)
+    {
+        CanvasLayer toastLayer = new CanvasLayer { Layer = 110 }; 
+
+        Label msgLabel = new Label { Text = text, HorizontalAlignment = HorizontalAlignment.Center };
+        msgLabel.AddThemeColorOverride("font_color", color);
+        
+        // --- BLINDAJE DE VISIBILIDAD ---
+        msgLabel.AddThemeFontSizeOverride("font_size", 28); // Texto más grande
+        msgLabel.AddThemeColorOverride("font_outline_color", new Color(0, 0, 0, 1)); // Borde negro sólido
+        msgLabel.AddThemeConstantOverride("outline_size", 8); // Grosor del borde
+        
+        // Posicionamiento
+        msgLabel.SetAnchorsPreset(Control.LayoutPreset.CenterTop);
+        msgLabel.Position = new Vector2(-400, 150); 
+        msgLabel.CustomMinimumSize = new Vector2(800, 50);
+
+        // --- INYECCIÓN DE JUICE: PARTÍCULAS UI ---
+        CpuParticles2D uiSparks = new CpuParticles2D();
+        uiSparks.Position = new Vector2(400, 25); // Lo centramos dentro de la caja del texto (800/2, 50/2)
+        uiSparks.Emitting = true;
+        uiSparks.Amount = 40;
+        uiSparks.Lifetime = 1.2f;
+        uiSparks.OneShot = true;
+        uiSparks.Explosiveness = 0.7f; // Estallido rápido al aparecer
+        uiSparks.EmissionShape = CpuParticles2D.EmissionShapeEnum.Rectangle;
+        uiSparks.EmissionRectExtents = new Vector2(350, 15); // Dispersión a lo largo de todo el texto
+        uiSparks.Gravity = new Vector2(0, 60f); // Caen suavemente
+        uiSparks.InitialVelocityMin = 30f;
+        uiSparks.InitialVelocityMax = 70f;
+        uiSparks.ScaleAmountMin = 2f;
+        uiSparks.ScaleAmountMax = 6f;
+        uiSparks.Color = color; // Las partículas heredan automáticamente el color (Verde) del texto
+
+        // Anidamos las partículas al texto para que suban con él
+        msgLabel.AddChild(uiSparks);
+        toastLayer.AddChild(msgLabel);
+        AddChild(toastLayer);
+
+        // Animación (Sube y se desvanece)
+        Tween tween = GetTree().CreateTween();
+        tween.TweenProperty(msgLabel, "position", msgLabel.Position + new Vector2(0, -90), 3.0f).SetTrans(Tween.TransitionType.Cubic).SetEase(Tween.EaseType.Out);
+        tween.Parallel().TweenProperty(msgLabel, "modulate", new Color(1, 1, 1, 0), 3.0f).SetTrans(Tween.TransitionType.Cubic).SetEase(Tween.EaseType.In);
+        
+        // Destrucción limpia
+        tween.TweenCallback(Callable.From(() => toastLayer.QueueFree()));
+    }
+
+    private void OpenLeaderboardPanel()
+    {
+        if (_leaderboardLayer != null && IsInstanceValid(_leaderboardLayer)) return;
+
+        _leaderboardLayer = new CanvasLayer { Layer = 92 }; 
+
+        ColorRect bg = new ColorRect { Color = new Color(0.08f, 0.08f, 0.1f, 0.98f) };
+        bg.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        _leaderboardLayer.AddChild(bg);
+
+        // Contenedor Central Absoluto
+        CenterContainer center = new CenterContainer();
+        center.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        _leaderboardLayer.AddChild(center);
+
+        VBoxContainer mainBox = new VBoxContainer { Alignment = BoxContainer.AlignmentMode.Center };
+        mainBox.AddThemeConstantOverride("separation", 30);
+        center.AddChild(mainBox);
+
+        Label title = new Label { Text = "SISTEMA DE CLASIFICACIÓN GLOBAL", HorizontalAlignment = HorizontalAlignment.Center };
+        title.AddThemeFontSizeOverride("font_size", 24);
+        title.AddThemeColorOverride("font_color", new Color(1.0f, 0.8f, 0.2f));
+        mainBox.AddChild(title);
+
+        // Contenedor Horizontal para las 3 columnas
+        _leaderboardColumnsContainer = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.Center };
+        _leaderboardColumnsContainer.AddThemeConstantOverride("separation", 60);
+        mainBox.AddChild(_leaderboardColumnsContainer);
+
+        Button btnClose = new Button { Text = "[ VOLVER AL ECOSISTEMA ]", CustomMinimumSize = new Vector2(250, 40), SizeFlagsHorizontal = Control.SizeFlags.ShrinkCenter };
+        btnClose.AddThemeColorOverride("font_color", new Color(0.9f, 0.2f, 0.2f));
+        btnClose.Pressed += () => _leaderboardLayer.QueueFree();
+        mainBox.AddChild(btnClose);
+
+        AddChild(_leaderboardLayer);
+
+        // Ejecutar la primera carga de datos
+        RefreshLeaderboardData();
+    }
+
+    private void RefreshLeaderboardData()
+    {
+        if (_leaderboardLayer == null || !IsInstanceValid(_leaderboardLayer)) return;
+
+        SupabaseManager.Instance.GetAllUsersForNetwork((allUsers) => 
+        {
+            if (_leaderboardLayer == null || !IsInstanceValid(_leaderboardLayer) || allUsers == null) return;
+
+            // Limpiamos las columnas viejas para inyectar los datos actualizados
+            foreach (Node child in _leaderboardColumnsContainer.GetChildren()) child.QueueFree();
+
+            // Convertimos a una Lista de C# para usar el motor de ordenamiento avanzado
+            System.Collections.Generic.List<Godot.Collections.Dictionary> usersList = new System.Collections.Generic.List<Godot.Collections.Dictionary>();
+            foreach (var u in allUsers) usersList.Add(u.AsGodotDictionary());
+
+            // 1. TOP PIEDRA
+            usersList.Sort((a, b) => b["piedra"].AsInt32().CompareTo(a["piedra"].AsInt32()));
+            CreateLeaderboardColumn("⛏ MÁXIMA PIEDRA DESTRUIDA", usersList, "piedra", new Color(0.6f, 0.6f, 0.6f));
+
+            // 2. TOP TIERRA
+            usersList.Sort((a, b) => b["tierra"].AsInt32().CompareTo(a["tierra"].AsInt32()));
+            CreateLeaderboardColumn("⚒ MÁXIMA TIERRA REMOVIDA", usersList, "tierra", new Color(0.7f, 0.5f, 0.3f));
+
+            // 3. TOP PINTURA
+            usersList.Sort((a, b) => b["pintura"].AsInt32().CompareTo(a["pintura"].AsInt32()));
+            CreateLeaderboardColumn("🖌 MÁXIMO LIENZO PINTADO", usersList, "pintura", new Color(0.8f, 0.2f, 0.6f));
+        });
+    }
+
+    private void CreateLeaderboardColumn(string title, System.Collections.Generic.List<Godot.Collections.Dictionary> sortedUsers, string statKey, Color titleColor)
+    {
+        VBoxContainer col = new VBoxContainer { CustomMinimumSize = new Vector2(250, 300) };
+        col.AddThemeConstantOverride("separation", 12);
+        
+        Label titleLabel = new Label { Text = title, HorizontalAlignment = HorizontalAlignment.Center };
+        titleLabel.AddThemeColorOverride("font_color", titleColor);
+        col.AddChild(titleLabel);
+
+        HSeparator sep = new HSeparator();
+        col.AddChild(sep);
+
+        // Extraemos solo el Top 10
+        int count = Mathf.Min(10, sortedUsers.Count);
+        int validRanks = 0;
+
+        for (int i = 0; i < count; i++)
+        {
+            var user = sortedUsers[i];
+            string nick = user["nickname"].AsString();
+            int score = user.ContainsKey(statKey) ? user[statKey].AsInt32() : 0;
+            
+            // Si el jugador tiene 0, no lo mostramos en el Top
+            if (score <= 0) continue; 
+            validRanks++;
+
+            Label row = new Label { Text = $"#{validRanks} | {nick} : {score} ptos" };
+            
+            // Si eres tú, tu nombre brilla en la tabla
+            if (nick == _activePlayerNick) 
+                row.AddThemeColorOverride("font_color", new Color(0.2f, 0.9f, 0.2f)); // Verde Neón
+            else
+                row.AddThemeColorOverride("font_color", new Color(0.8f, 0.8f, 0.8f));
+
+            col.AddChild(row);
+        }
+
+        if (validRanks == 0)
+        {
+            Label empty = new Label { Text = "Sin datos aún...", HorizontalAlignment = HorizontalAlignment.Center };
+            empty.AddThemeColorOverride("font_color", new Color(0.4f, 0.4f, 0.4f));
+            col.AddChild(empty);
+        }
+
+        _leaderboardColumnsContainer.AddChild(col);
     }
 }

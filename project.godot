@@ -20,6 +20,11 @@ config/icon="res://icon.svg"
 SupabaseManager="*uid://b0jvtmopvcvsj"
 PlayerManager="*uid://diu78ffetft4t"
 
+[display]
+
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+
 [dotnet]
 
 project/assembly_name="De Pico y Pala Para Pincel"

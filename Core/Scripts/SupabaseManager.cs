@@ -325,6 +325,40 @@ public partial class SupabaseManager : Node
         request.Request(url, headers, HttpClient.Method.Get);
     }
 
+    public void GetAllUsersForNetwork(System.Action<Godot.Collections.Array> onCompleted)
+    {
+        HttpRequest request = new HttpRequest();
+        AddChild(request);
+
+        request.RequestCompleted += (result, responseCode, headers, body) => 
+        {
+            if (responseCode == 200)
+            {
+                Json json = new Json();
+                if (json.Parse(System.Text.Encoding.UTF8.GetString(body)) == Error.Ok)
+                {
+                    onCompleted?.Invoke(json.Data.AsGodotArray());
+                }
+            }
+            else
+            {
+                GD.PrintErr($"[SUPABASE] Error escaneando red global: {responseCode}");
+                onCompleted?.Invoke(null);
+            }
+            request.CallDeferred(Node.MethodName.QueueFree);
+        };
+
+        // Escaneamos a todos los usuarios, pero solo traemos las columnas necesarias para armar el GraphEdit
+        string url = $"{_supabaseUrl}/rest/v1/usuarios?select=nickname,country,blocks_cleared,tierra,piedra,pintura,invited_by";
+        string[] headers = {
+            "apikey: " + _supabaseKey,
+            "Authorization: Bearer " + _supabaseKey,
+            "Accept: application/json"
+        };
+
+        request.Request(url, headers, HttpClient.Method.Get);
+    }
+
     // =======================================================
     // ESCÁNER DE ESTADÍSTICAS PERSONALES
     // =======================================================
