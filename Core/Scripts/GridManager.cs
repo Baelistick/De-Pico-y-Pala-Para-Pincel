@@ -97,6 +97,10 @@ public partial class GridManager : TileMap
     private float _minZoom = 0.1f; // Límite de alejamiento (se autocalcula luego)
     private float _maxZoom = 4.0f; // Límite de acercamiento máximo
 
+    // --- NUEVO: SISTEMA DE NAVEGACIÓN ---
+    private bool _isDragging = false;
+    private Vector2 _lastMousePosition;
+
     // Variables de Eventos del Entorno (Lógica Dura)
     private Random _random = new Random();
     private Timer _spawnTimer;
@@ -241,6 +245,24 @@ public partial class GridManager : TileMap
             }
             // Fuerza la actualización visual de la pintura
             _paintOverlay.QueueRedraw();
+        });
+
+        SupabaseManager.Instance.GetPlayerStats(_activePlayerNick, (myStats) => 
+        {
+            if (myStats != null && myStats.ContainsKey("action_points"))
+            {
+                int serverEnergy = myStats["action_points"].AsInt32();
+
+                // [CORTAFUEGOS ANTI-REBOTE]
+                // Solo aceptamos la energía del servidor si es masivamente mayor a la local (El bono de +50).
+                // Esto evita que recuperes 1 punto mágicamente por el ligero retraso de internet al hacer clic.
+                if (serverEnergy >= _currentActionPoints + 40) 
+                {
+                    GD.Print("[RED] ¡NUEVO RECLUTA DETECTADO! Bono de energía recibido en tiempo real.");
+                    _currentActionPoints = serverEnergy;
+                    UpdateEnergyUI();
+                }
+            }
         });
     }
 
@@ -613,18 +635,52 @@ public partial class GridManager : TileMap
             return;
         }
 
-        // LÓGICA CLÁSICA DE CLIC SIMPLE (Un bloque a la vez)
-        if (@event is InputEventMouseButton mouseEvent && mouseEvent.Pressed && mouseEvent.ButtonIndex == MouseButton.Left)
+        // --- DETECCIÓN DE BOTONES DEL RATÓN ---
+        if (@event is InputEventMouseButton mouseBtnEvent)
         {
-            // BARRERA DE ENERGÍA: Verificamos si hay energía antes de procesar el golpe
-            if (_currentActionPoints > 0)
+            // 1. SISTEMA DE NAVEGACIÓN (Arrastre con Clic Derecho o Rueda)
+            if (mouseBtnEvent.ButtonIndex == MouseButton.Right || mouseBtnEvent.ButtonIndex == MouseButton.Middle)
             {
-                ProcessMapInteraction(GetLocalMousePosition());
+                if (mouseBtnEvent.Pressed)
+                {
+                    _isDragging = true;
+                    _lastMousePosition = mouseBtnEvent.Position;
+                }
+                else
+                {
+                    _isDragging = false;
+                }
             }
-            else
+
+            // 2. LÓGICA CLÁSICA DE INTERACCIÓN (Clic Izquierdo)
+            if (mouseBtnEvent.Pressed && mouseBtnEvent.ButtonIndex == MouseButton.Left)
             {
-                GD.PrintErr("[SISTEMA] Energía agotada. Espere la recarga o llame a sus refuerzos.");
-                UpdateEnergyUI(); // Fuerza el color rojo
+                // BARRERA DE ENERGÍA
+                if (_currentActionPoints > 0)
+                {
+                    ProcessMapInteraction(GetLocalMousePosition());
+                }
+                else
+                {
+                    GD.PrintErr("[SISTEMA] Energía agotada. Espere la recarga o llame a sus refuerzos.");
+                    UpdateEnergyUI(); // Fuerza el color rojo
+                }
+            }
+        }
+
+        // --- SISTEMA DE PANEADO EN TIEMPO REAL ---
+        if (@event is InputEventMouseMotion mouseMotionEvent)
+        {
+            if (_isDragging)
+            {
+                // Calculamos cuánto se movió el ratón en la pantalla
+                Vector2 delta = mouseMotionEvent.Position - _lastMousePosition;
+                
+                // Aplicamos el movimiento a la cámara de forma inversa y compensada por el zoom
+                _devCamera.Position -= delta * (1.0f / _devCamera.Zoom.X);
+                
+                // Refrescamos la memoria de la posición para el siguiente fotograma
+                _lastMousePosition = mouseMotionEvent.Position;
             }
         }
     }
