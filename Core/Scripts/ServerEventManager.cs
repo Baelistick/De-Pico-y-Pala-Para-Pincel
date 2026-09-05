@@ -1,13 +1,20 @@
+/*
+ * BAELISTICK LABS | MENTE-0 ARCHITECTURE
+ * Project: De Pico y Pala Para Pincel
+ * Module: ServerEventManager
+ * Description: Admin-exclusive environmental event controller. Handles the mathematical 
+ *              evaluation of perimeter defenses and coordinates global debris spawning.
+ * Coupling Level: High. Tightly coupled with GridManager and SupabaseManager.
+*/
+
 using Godot;
 using System;
 using System.Collections.Generic;
-using Godot.Collections;
 
-// Nivel de acoplamiento: Alto con GridManager y Supabase. Solo debe ejecutarse en el cliente Admin.
 public partial class ServerEventManager : Node
 {
-    [Export] public bool IsAdminClient = true; // Apagar en la versión pública
-    [Export] public float EventIntervalSeconds = 5.0f; // 1 Hora por defecto. (Cámbialo a 10f para probar)
+    [Export] public bool IsAdminClient = true; 
+    [Export] public float EventIntervalSeconds = 5.0f; 
 
     private Timer _eventTimer;
     private GridManager _grid;
@@ -16,7 +23,7 @@ public partial class ServerEventManager : Node
     {
         if (!IsAdminClient) return;
 
-        _grid = GetNode<GridManager>("../TileMap"); // Ajusta la ruta si es necesario
+        _grid = GetNode<GridManager>("../TileMap"); 
 
         _eventTimer = new Timer();
         _eventTimer.WaitTime = EventIntervalSeconds;
@@ -24,66 +31,85 @@ public partial class ServerEventManager : Node
         _eventTimer.Timeout += OnServerEventTriggered;
         AddChild(_eventTimer);
         
-        GD.Print("NEXUS-JAM: Módulo de Eventos de Servidor [ACTIVO].");
+        GD.Print("[SERVER EVENT MANAGER] Module Initialized.");
     }
 
+    /// <summary>
+    /// Triggered periodically by the event timer.
+    /// Acts as an identity firewall: Only the verified master developer account 
+    /// can authorize environmental changes to the global database.
+    /// </summary>
     private void OnServerEventTriggered()
     {
-        GD.Print("NEXUS-JAM: Iniciando evaluación de bordes...");
-        SupabaseManager.Instance.FetchAllPixels((data) => EvaluateAndDropDebris(data));
+        string activeNick = _grid.PublicPlayerNick;
+
+        // Strict Authority Validation (Hardcoded to Baelistick for security)
+        if (activeNick == "Baelistick") 
+        {
+            GD.Print("[SERVER EVENT MANAGER] Authority confirmed. Initiating perimeter scan...");
+            SupabaseManager.Instance.FetchAllPixels("", (data) => EvaluateAndDropDebris(data));
+        }
+        else
+        {
+            GD.Print("[SERVER EVENT MANAGER] Access Denied. Client lacks environmental override authority.");
+        }
     }
 
+    /// <summary>
+    /// Reconstructs the grid state in local memory to evaluate defense integrity.
+    /// Spawns debris payloads based on which perimeter layers remain unsealed.
+    /// </summary>
     private void EvaluateAndDropDebris(Godot.Collections.Array serverData)
     {
         int[,] gridState = new int[_grid.GridSize.X, _grid.GridSize.Y];
         
-        // 1. Reconstruir estado actual en memoria local
+        // 1. Reconstruct current state in local memory
         foreach (var item in serverData)
         {
             var dict = item.AsGodotDictionary();
             gridState[(int)dict["x"], (int)dict["y"]] = (int)dict["tile_type"];
         }
 
-        // 2. Lógica Dura de Bordes
-        bool layer1Sealed = CheckBorderLayer(gridState, 0); // Borde exterior (1 capa)
-        bool layer2Sealed = CheckBorderLayer(gridState, 1); // Borde interior (2 capas)
-
-        GD.Print($"Análisis de defensas - Capa 1 Sellada: {layer1Sealed} | Capa 2 Sellada: {layer2Sealed}");
+        // 2. Perimeter Defense Logic
+        bool layer1Sealed = CheckBorderLayer(gridState, 0); // Outer Ring (Blocks Stone)
+        bool layer2Sealed = CheckBorderLayer(gridState, 1); // Inner Ring (Blocks Dirt)
 
         List<Vector2I> corruptedPixels = new List<Vector2I>();
         Random rand = new Random();
 
-        // 3. Castigo del servidor si fallan las defensas
-        for (int i = 0; i < 20; i++) // 20 bloques caen al azar por evento
+        // 3. Server-side penalty execution if defenses are breached
+        for (int i = 0; i < 20; i++) // Standard debris payload
         {
             int rx = rand.Next(2, _grid.GridSize.X - 2);
             int ry = rand.Next(2, _grid.GridSize.Y - 2);
 
             if (!layer1Sealed) 
             {
-                // Cae Piedra (Tipo 2) si no hay ni 1 línea
+                // Unsealed Outer Ring: Spawn Stone (Type 2)
                 corruptedPixels.Add(new Vector2I(rx, ry));
                 gridState[rx, ry] = 2; 
             }
             else if (!layer2Sealed)
             {
-                // Cae Tierra (Tipo 1) si hay 1 línea pero no 2
+                // Unsealed Inner Ring: Spawn Dirt (Type 1)
                 corruptedPixels.Add(new Vector2I(rx, ry));
                 gridState[rx, ry] = 1;
             }
         }
 
-        // 4. Enviar castigo masivo a Supabase
+        // 4. Batch push payload to remote database
         foreach (Vector2I pos in corruptedPixels)
         {
             int tileType = gridState[pos.X, pos.Y];
-            // Reutilizamos el método del Sprint 2 para inyectar la penalización
             SupabaseManager.Instance.SavePixel(pos.X, pos.Y, tileType, null);
-            _grid.SetCell(0, pos, 0, new Vector2I(tileType, 0)); // Actualización visual admin
+            _grid.SetCell(0, pos, 0, new Vector2I(tileType, 0)); // Local visual update for the Admin
         }
     }
 
-    // Algoritmo de escaneo de perímetro
+    /// <summary>
+    /// Mathematical perimeter scanner. Validates if a specific structural ring
+    /// contains any vulnerabilities (empty canvas blocks).
+    /// </summary>
     private bool CheckBorderLayer(int[,] grid, int depth)
     {
         int maxX = _grid.GridSize.X - 1 - depth;
@@ -91,11 +117,13 @@ public partial class ServerEventManager : Node
         int minX = depth;
         int minY = depth;
 
+        // X-Axis Scanner (Top and Bottom edges)
         for (int x = minX; x <= maxX; x++)
         {
-            // Verificamos que no sea tipo 0 (Lienzo blanco). Si es distinto a 0, está pintado/defendido.
             if (grid[x, minY] == 0 || grid[x, maxY] == 0) return false; 
         }
+        
+        // Y-Axis Scanner (Left and Right edges)
         for (int y = minY; y <= maxY; y++)
         {
             if (grid[minX, y] == 0 || grid[maxX, y] == 0) return false;

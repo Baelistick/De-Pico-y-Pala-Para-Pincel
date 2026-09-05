@@ -1,17 +1,38 @@
+/*
+ * BAELISTICK LABS | MENTE-0 ARCHITECTURE
+ * Project: De Pico y Pala Para Pincel
+ * Module: GridManager
+ * Description: Core gameplay controller. Handles TileMap interactions, procedural UI generation,
+ *              multi-touch/mouse input, local rendering, and coordinates with SupabaseManager.
+ * Coupling Level: High. Acts as the primary orchestrator for the client application.
+*/
+
 using Godot;
 using System;
 using System.Collections.Generic;
 
 public partial class GridManager : TileMap
 {
+    public string PublicPlayerNick => _activePlayerNick;
     private Timer _networkSyncTimer;
-    // --- SISTEMA DE ENERGÍA Y RECARGA ---
+
+    // Synchronization memory (UTC ISO-8601 format)
+    private string _lastSyncTimestamp = "";
+
+    // --- MULTI-TOUCH SYSTEM (Pinch-to-Zoom) ---
+    private System.Collections.Generic.Dictionary<int, Vector2> _activeTouches = new System.Collections.Generic.Dictionary<int, Vector2>();
+    private float _lastPinchDistance = 0f;
+
+    // Local ownership cache for energy-free repainting
+    private System.Collections.Generic.HashSet<Vector2I> _myPixels = new System.Collections.Generic.HashSet<Vector2I>();
+
+    // --- ENERGY & ECONOMY SYSTEM ---
     private int _currentActionPoints = 50; 
     private Label _actionPointsLabel;
     private Timer _rechargeTimer;
-    private float _rechargeTimeMinutes = 10.0f; // [VARIABLE MODIFICABLE] Tiempo de recarga
+    private float _rechargeTimeMinutes = 10.0f; 
 
-    // --- TRADUCTOR DE BANDERAS ISO ---
+    // --- ISO FLAG TRANSLATOR ---
     private readonly Dictionary<string, string> _countryToIso = new Dictionary<string, string>
     {
         {"Argentina", "ar"}, {"Bolivia", "bo"}, {"Brasil", "br"}, {"Canadá", "ca"},
@@ -24,93 +45,93 @@ public partial class GridManager : TileMap
         {"Japón", "jp"}, {"Reino Unido", "gb"}, {"Rusia", "ru"}
     };
 
-    // --- SUPERPOSICIÓN DE COORDENADAS ---
+    // --- TACTICAL OVERLAYS ---
     private Node2D _coordinateOverlay;
     public enum TileType { Canvas = 0, Dirt = 1, Stone = 2 }
-    public enum ActionType { Paintbrush, Shovel, Pickaxe }
+    public enum ActionType { Paintbrush, Shovel, Pickaxe, Eyedropper }
 
-    // --- RED DE REFUERZOS (GraphEdit UI) ---
+    // --- NETWORK GRAPH UI ---
     private CanvasLayer _networkLayer;
     private Godot.GraphEdit _networkGraph;
     private Button _btnOpenNetwork;
 
-    // --- SISTEMA DE PUNTUACIONES (TOP GLOBAL) ---
+    // --- GLOBAL LEADERBOARD UI ---
     private CanvasLayer _leaderboardLayer;
     private HBoxContainer _leaderboardColumnsContainer;
 
-    // --- BARRERA DE AUTENTICACIÓN (Lógica Dura) ---
+    // --- AUTHENTICATION UI ---
     private CanvasLayer _authLayer;
     private Control _authScreen;
     private LineEdit _nickInput;
     private LineEdit _passInput;
     private OptionButton _countrySelector;
-
-    private LineEdit _recruiterInput; // <--- NUEVA VARIABLE INYECTADA
+    private LineEdit _recruiterInput;
     private bool _isPlayerAuthenticated = false;
 
-    // --- MEMORIA DE JUGADOR ACTIVO ---
+    // --- SESSION MEMORY ---
     private string _activePlayerNick = "";
-    
-    // Controles de Estado
     private bool _isLoginMode = false;
     private Label _authTitleLabel;
     private Button _submitAuthBtn;
     private Button _toggleModeBtn;
+    private Label _onlineCountLabel;
 
-    // --- TELEMETRÍA DE RED (Tiltify API - OAuth2 Automático) ---
+    // --- TILTIFY API TELEMETRY (OAuth2) ---
     private HttpRequest _tiltifyAuthRequest;
     private HttpRequest _tiltifyDataRequest;
     private Timer _apiTimer;
 
-    // Pega aquí tus credenciales del panel de la App
+    // API Credentials
     private string _clientId = "0d76aa539e8b96d1b008a8521151cb9b44e3feb493acdad4963271346ab0e623"; 
     private string _clientSecret = "0b05b2cce7ab2edd45ba8c1fb87f5246509a93ca32b2d60fdbef5c32c2fea078"; 
-    
-    // Pega aquí el ID que extrajiste de la URL del Dashboard
     private string _tiltifyCampaignId = "096442d7-4e70-4025-b5ee-ea29ea323b28"; 
-    
     private string _tiltifyToken = "";
 
-    [Export] public Vector2I GridSize = new Vector2I(50, 50);
-    
+    [Export] public Vector2I GridSize = new Vector2I(100, 100);
     private const int TILESET_SOURCE_ID = 0;
+    private ColorPickerButton _colorPickerBtn;
 
-    // --- MEMORIA DE NOTIFICACIONES ---
+    // --- NOTIFICATION MEMORY ---
     private bool _wasRing1Sealed = false;
     private bool _wasRing2Sealed = false;
     private float _lastKnownDonationAmount = -1f;
     
-    // Bypass Espacial
+    // Atlas Coordinates Bypass
     private readonly Vector2I ATLAS_CANVAS = new Vector2I(0, 0); 
     private readonly Vector2I ATLAS_STONE = new Vector2I(4, 0);  
     private readonly Vector2I ATLAS_DIRT = new Vector2I(7, 0);   
 
     public ActionType CurrentTool = ActionType.Paintbrush;
-    public Color CurrentPaintColor = new Color(1, 0, 0); // Rojo por defecto
+    public Color CurrentPaintColor = new Color(1, 0, 0); 
     
     private ReferenceRect _cursorRect;
-    private Label _toolIcon;
+    private TextureRect _toolIcon; 
     
-    // Diccionario para almacenar la memoria de colores del lienzo
+    // Paint rendering layer
     private Dictionary<Vector2I, Color> _paintedPixels = new Dictionary<Vector2I, Color>();
-    private Node2D _paintOverlay; // Capa superior para renderizar el pincel
+    private Node2D _paintOverlay; 
 
-    // Variables de HUD y Progreso (Lógica Dura)
+    // HUD & Progress variables
     private ProgressBar _cleanProgressBar;
     private ProgressBar _donationProgressBar;
     private int _totalTiles;
+    private int _currentCleanCount = 0; 
 
-    // Variables de la Cámara (Lógica Dura)
+    // --- I18N SYSTEM ---
+    private bool _isEnglish = false;
+    private Button _langToggleButton;
+
+    // Camera Configuration
     private Camera2D _devCamera;
     private float _currentZoom = 1.0f;
-    private float _minZoom = 0.1f; // Límite de alejamiento (se autocalcula luego)
-    private float _maxZoom = 4.0f; // Límite de acercamiento máximo
+    private float _minZoom = 0.1f; 
+    private float _maxZoom = 4.0f; 
 
-    // --- NUEVO: SISTEMA DE NAVEGACIÓN ---
+    // --- NAVIGATION LOGIC ---
     private bool _isDragging = false;
     private Vector2 _lastMousePosition;
 
-    // Variables de Eventos del Entorno (Lógica Dura)
+    // Environmental Event Configuration
     private Random _random = new Random();
     private Timer _spawnTimer;
     
@@ -119,34 +140,34 @@ public partial class GridManager : TileMap
         InitializeLocalGrid(); 
         InitializeProceduralUI();
 
-        // Inicializar Motor de Recarga de Energía
+        // Energy Recharge Engine
         _rechargeTimer = new Timer();
-        _rechargeTimer.WaitTime = _rechargeTimeMinutes * 60.0f; // Convertimos minutos a segundos
+        _rechargeTimer.WaitTime = _rechargeTimeMinutes * 60.0f; 
         _rechargeTimer.Autostart = true;
         _rechargeTimer.Timeout += OnRechargeTick;
         AddChild(_rechargeTimer);
 
-        // 1. CAPA DE PINTURA: Se coloca sobre el TileMap (ZIndex = 5)
+        // Paint Rendering Layer (ZIndex = 5 ensures it renders above the TileMap)
         _paintOverlay = new Node2D();
         _paintOverlay.ZIndex = 5; 
-        _paintOverlay.Draw += DrawPaintOverlay; // Conectamos el evento de dibujo
+        _paintOverlay.Draw += DrawPaintOverlay; 
         AddChild(_paintOverlay);
 
-        // 2. RELOJ DEL ECOSISTEMA (Generación provisional de escombros)
+        // Environmental clock for procedural debris spawning
         _spawnTimer = new Timer();
-        _spawnTimer.WaitTime = 10.0f; // Intervalo provisional de 10 segundos
+        _spawnTimer.WaitTime = 10.0f; 
         _spawnTimer.Autostart = true;
-        _spawnTimer.Timeout += SpawnRandomDebris; // Conecta el reloj a la función
+        _spawnTimer.Timeout += SpawnRandomDebris; 
         AddChild(_spawnTimer);
 
-        // 4. CLIENTES HTTP (Lógica Dura de Autenticación)
+        // HTTP Clients for API Auth
         _tiltifyAuthRequest = new HttpRequest();
         AddChild(_tiltifyAuthRequest);
         _tiltifyAuthRequest.RequestCompleted += OnTiltifyTokenReceived;
 
         _tiltifyDataRequest = new HttpRequest();
         AddChild(_tiltifyDataRequest);
-        _tiltifyDataRequest.RequestCompleted += OnTiltifyDataReceived; // La función que ya tenías
+        _tiltifyDataRequest.RequestCompleted += OnTiltifyDataReceived;
 
         _apiTimer = new Timer();
         _apiTimer.WaitTime = 60.0f; 
@@ -154,10 +175,10 @@ public partial class GridManager : TileMap
         _apiTimer.Timeout += RequestTiltifyData; 
         AddChild(_apiTimer);
         
-        // Fase 1: Pedir las llaves de seguridad al arrancar el motor
+        // Initial token request
         RequestTiltifyToken();
 
-        // 3. CÁMARA TÁCTICA AUTOMÁTICA (Con Margen Aislante)
+        // Automated Tactical Camera Setup
         _devCamera = new Camera2D();
         Vector2 mapPixelSize = new Vector2(GridSize.X * TileSet.TileSize.X, GridSize.Y * TileSet.TileSize.Y);
         _devCamera.Position = mapPixelSize / 2f; 
@@ -165,15 +186,14 @@ public partial class GridManager : TileMap
         Vector2 viewportSize = GetViewportRect().Size;
         float baseZoomFactor = Mathf.Min((viewportSize.X - 150) / mapPixelSize.X, (viewportSize.Y - 250) / mapPixelSize.Y);
         
-        // Asignamos el factor base como el zoom actual y el límite mínimo permitido
         _minZoom = baseZoomFactor; 
         _currentZoom = _minZoom;
 
-        // Inicializar Capa de Coordenadas Tácticas
+        // Tactical Coordinates Overlay Layer
         _coordinateOverlay = new Node2D();
-        _coordinateOverlay.ZIndex = 5; // Se dibuja por encima de las baldosas
-        // --- INYECCIÓN DE ALTA DENSIDAD ---
-        _coordinateOverlay.Scale = new Vector2(0.2f, 0.2f); // La encogemos a una quinta parte
+        _coordinateOverlay.ZIndex = 5; 
+        _coordinateOverlay.Scale = new Vector2(0.2f, 0.2f); 
+        _coordinateOverlay.Visible = false; // Disabled by default for performance optimization
         AddChild(_coordinateOverlay);
         _coordinateOverlay.Draw += DrawCoordinatesOverlay;
         
@@ -181,14 +201,14 @@ public partial class GridManager : TileMap
         AddChild(_devCamera);
         _devCamera.MakeCurrent();
 
-        // Intercepción del flujo: Primero mostramos la tarjeta benéfica
+        // Initialize user flow: Show charity welcome card first
         InitializeWelcomeUI();
 
-        // [DESBLOQUEO TÁCTICO] 
-        // Descomenta esto SOLO cuando hayas limpiado tu base de datos (TRUNCATE TABLE pixels)
-        
-        SupabaseManager.Instance.FetchAllPixels((serverData) => 
+        // Initial Full Ecosystem Sync
+        SupabaseManager.Instance.FetchAllPixels("", (serverData) =>
         {
+            _lastSyncTimestamp = Time.GetDatetimeStringFromSystem(true, true) + "Z";
+
             foreach (var item in serverData)
             {
                 var dict = item.AsGodotDictionary();
@@ -196,8 +216,20 @@ public partial class GridManager : TileMap
                 int y = (int)dict["y"];
                 int type = (int)dict["tile_type"];
                 string hexColor = dict["hex_color"].AsString();
-                
+
                 Vector2I pos = new Vector2I(x, y);
+                string owner = dict.ContainsKey("owner_nick") ? dict["owner_nick"].AsString() : "";
+
+                // Identity Firewall: Verify ownership for energy exemption
+                if (!string.IsNullOrEmpty(owner) && owner == _activePlayerNick)
+                {
+                    _myPixels.Add(pos);
+                }
+                else
+                {
+                    _myPixels.Remove(pos);
+                }
+    
                 SetTile(pos, (TileType)type);
 
                 if (type == 0 && !string.IsNullOrEmpty(hexColor))
@@ -206,22 +238,23 @@ public partial class GridManager : TileMap
                 }
             }
             _paintOverlay.QueueRedraw();
+            
+            // Recalibrate UI to reflect downloaded database state
+            CalculateInitialCleanliness();
         });
 
-        // RELOJ DE SINCRONIZACIÓN DE RED (RADAR)
+        // Network Synchronization Clock (Delta Sync Radar)
         _networkSyncTimer = new Timer();
-        _networkSyncTimer.WaitTime = 5.0f; // Escanea el mapa cada 5 segundos
+        _networkSyncTimer.WaitTime = 5.0f; 
         _networkSyncTimer.Autostart = true;
         _networkSyncTimer.Timeout += SyncMapData;
         AddChild(_networkSyncTimer);
-        
     }
 
     private void InitializeWelcomeUI()
     {
-        CanvasLayer welcomeLayer = new CanvasLayer { Layer = 150 }; // Capa absoluta suprema
+        CanvasLayer welcomeLayer = new CanvasLayer { Layer = 150 }; 
 
-        // Fondo oscuro para aislar la atención del jugador
         ColorRect bgDark = new ColorRect { Color = new Color(0.02f, 0.02f, 0.02f, 0.95f) };
         bgDark.SetAnchorsPreset(Control.LayoutPreset.FullRect);
         welcomeLayer.AddChild(bgDark);
@@ -230,61 +263,68 @@ public partial class GridManager : TileMap
         center.SetAnchorsPreset(Control.LayoutPreset.FullRect);
         bgDark.AddChild(center);
 
-        // Contenedor principal de la tarjeta
-        VBoxContainer cardBox = new VBoxContainer { CustomMinimumSize = new Vector2(700, 400), Alignment = BoxContainer.AlignmentMode.Center };
-        cardBox.AddThemeConstantOverride("separation", 25);
+        VBoxContainer cardBox = new VBoxContainer { CustomMinimumSize = new Vector2(700, 450), Alignment = BoxContainer.AlignmentMode.Center };
+        cardBox.AddThemeConstantOverride("separation", 20);
         center.AddChild(cardBox);
 
-        // TÍTULO
-        Label title = new Label { Text = "¡Bienvenido a Pico, Pala y Pincel!", HorizontalAlignment = HorizontalAlignment.Center };
-        title.AddThemeFontSizeOverride("font_size", 32);
-        title.AddThemeColorOverride("font_color", new Color(1.0f, 0.8f, 0.2f)); // Amarillo brillante
-        cardBox.AddChild(title);
+        Button btnLangToggle = new Button { 
+            Text = _isEnglish ? "🌐 Cambiar a Español (ES)" : "🌐 Switch to English (EN)", 
+            CustomMinimumSize = new Vector2(240, 35), 
+            SizeFlagsHorizontal = Control.SizeFlags.ShrinkCenter 
+        };
+        btnLangToggle.AddThemeColorOverride("font_color", new Color(0.4f, 0.8f, 1.0f));
 
-        // TEXTO BENÉFICO
+        Label title = new Label { Text = GetText("WELCOME_TITLE"), HorizontalAlignment = HorizontalAlignment.Center };
+        title.AddThemeFontSizeOverride("font_size", 30);
+        title.AddThemeColorOverride("font_color", new Color(1.0f, 0.8f, 0.2f));
+
         Label body1 = new Label { 
-            Text = "Este es un juego Benéfico en Apoyo a los Afectados el 24 de Julio de 2026 en Venezuela. Compartir el juego con tus amigos ya es un enorme apoyo a esta noble causa. ¡Gracias por llegar hasta aquí de todo corazón! ❤", 
+            Text = GetText("WELCOME_BODY1"), 
             HorizontalAlignment = HorizontalAlignment.Center, 
             AutowrapMode = TextServer.AutowrapMode.Word 
         };
         body1.AddThemeColorOverride("font_color", new Color(0.9f, 0.9f, 0.9f));
-        cardBox.AddChild(body1);
 
-        // SEPARADOR TÁCTICO
-        HSeparator sep1 = new HSeparator();
-        cardBox.AddChild(sep1);
-
-        // CONTROLES
         Label body2 = new Label { 
-            Text = "⛏ Con Pico (1) Quitas la Piedra\n⚒ Con Pala (2) Remueves Tierra\n🖌 Con Pincel (3) Pintas Casilla", 
+            Text = GetText("WELCOME_CONTROLS"), 
             HorizontalAlignment = HorizontalAlignment.Center 
         };
-        body2.AddThemeColorOverride("font_color", new Color(0.2f, 0.8f, 1.0f)); // Azul táctico
-        cardBox.AddChild(body2);
+        body2.AddThemeColorOverride("font_color", new Color(0.2f, 0.8f, 1.0f));
 
-        // SEPARADOR TÁCTICO
-        HSeparator sep2 = new HSeparator();
-        cardBox.AddChild(sep2);
-
-        // OBJETIVO FINAL
         Label body3 = new Label { 
-            Text = "Coordina a tus amigos para hacer un dibujo, mensaje o ayudar a remover los escombros es una gran ayuda. Al terminar todos los objetivos el lienzo completo será publicado para descargar y compartir, demostrándole al mundo lo unidos que podemos estar cuando es necesario estar Juntos en los momentos más complicados.", 
+            Text = GetText("WELCOME_BODY3"), 
             HorizontalAlignment = HorizontalAlignment.Center, 
             AutowrapMode = TextServer.AutowrapMode.Word 
         };
         body3.AddThemeColorOverride("font_color", new Color(0.8f, 0.8f, 0.8f));
-        cardBox.AddChild(body3);
 
-        // BOTÓN DE CONTINUAR (El detonador de la Auth UI)
-        Button btnContinue = new Button { Text = "ENTENDIDO - CONTINUAR", CustomMinimumSize = new Vector2(300, 50), SizeFlagsHorizontal = Control.SizeFlags.ShrinkCenter };
-        btnContinue.AddThemeColorOverride("font_color", new Color(0.2f, 0.9f, 0.4f)); // Verde para avanzar
-        
+        Button btnContinue = new Button { Text = GetText("WELCOME_BTN"), CustomMinimumSize = new Vector2(300, 50), SizeFlagsHorizontal = Control.SizeFlags.ShrinkCenter };
+        btnContinue.AddThemeColorOverride("font_color", new Color(0.2f, 0.9f, 0.4f));
+
+        btnLangToggle.Pressed += () => 
+        {
+            _isEnglish = !_isEnglish;
+            btnLangToggle.Text = _isEnglish ? "🌐 Cambiar a Español (ES)" : "🌐 Switch to English (EN)";
+            title.Text = GetText("WELCOME_TITLE");
+            body1.Text = GetText("WELCOME_BODY1");
+            body2.Text = GetText("WELCOME_CONTROLS");
+            body3.Text = GetText("WELCOME_BODY3");
+            btnContinue.Text = GetText("WELCOME_BTN");
+        };
+
         btnContinue.Pressed += () => 
         {
-            welcomeLayer.QueueFree(); // Destruye la tarjeta
-            InitializeAuthUI();       // Invoca la pantalla de registro
+            welcomeLayer.QueueFree(); 
+            InitializeAuthUI();       
         };
-        
+
+        cardBox.AddChild(btnLangToggle);
+        cardBox.AddChild(title);
+        cardBox.AddChild(body1);
+        cardBox.AddChild(new HSeparator());
+        cardBox.AddChild(body2);
+        cardBox.AddChild(new HSeparator());
+        cardBox.AddChild(body3);
         cardBox.AddChild(btnContinue);
 
         AddChild(welcomeLayer);
@@ -295,17 +335,28 @@ public partial class GridManager : TileMap
         _currentActionPoints += 10;
         UpdateEnergyUI();
         SupabaseManager.Instance.RecargarEnergia(_activePlayerNick, 10);
-        GD.Print($"[ECOSISTEMA] Recarga completada. Puntos actuales: {_currentActionPoints}");
+        GD.Print($"[SYSTEM] Energy recharged. Current Points: {_currentActionPoints}");
     }
 
     private void SyncMapData()
     {
-        // El radar no funciona si el operativo no ha ingresado al ecosistema
         if (!_isPlayerAuthenticated) return;
 
-        SupabaseManager.Instance.FetchAllPixels((serverData) => 
+        // Population Radar Ping
+        SupabaseManager.Instance.PingAndGetOnlineCount(_activePlayerNick, (count) => 
         {
-            if (serverData == null) return; // Cortafuegos por si la red falla
+            if (_onlineCountLabel != null)
+                _onlineCountLabel.Text = $"{count} Online";
+        });
+
+        // Delta Sync: Retrieve only modified pixels based on timestamp
+        SupabaseManager.Instance.FetchAllPixels(_lastSyncTimestamp, (serverData) =>
+        {
+            _lastSyncTimestamp = Time.GetDatetimeStringFromSystem(true, true) + "Z";
+
+            if (serverData == null || serverData.Count == 0) return; 
+
+            bool mapHasChanged = false;
 
             foreach (var item in serverData)
             {
@@ -314,47 +365,87 @@ public partial class GridManager : TileMap
                 int y = (int)dict["y"];
                 int type = (int)dict["tile_type"];
                 string hexColor = dict["hex_color"].AsString();
-                
+    
                 Vector2I pos = new Vector2I(x, y);
-                
-                // Actualiza solo si hubo cambios reales en el terreno
-                if (GetTileType(pos) != (TileType)type)
-                {
-                    SetTile(pos, (TileType)type);
-                }
+                string owner = dict.ContainsKey("owner_nick") ? dict["owner_nick"].AsString() : "";
 
-                if (type == 0 && !string.IsNullOrEmpty(hexColor))
+                if (owner == _activePlayerNick)
+                    _myPixels.Add(pos);
+                else
+                    _myPixels.Remove(pos);
+    
+                SetTile(pos, (TileType)type);
+                
+                if (IsWithinBounds(pos))
                 {
-                    _paintedPixels[pos] = new Color(hexColor);
+                    TileType oldType = GetTileType(pos);
+                    TileType newType = (TileType)type;
+                    bool localMapChanged = false;
+
+                    // Evaluate structural changes (Dirt/Stone breaking)
+                    if (oldType != newType)
+                    {
+                        SetTile(pos, newType);
+                        localMapChanged = true;
+
+                        // Deduce tool used for remote visual feedback
+                        if (newType == TileType.Canvas)
+                        {
+                            if (oldType == TileType.Stone) 
+                                SpawnImpactEffects(pos, ActionType.Pickaxe);
+                            else if (oldType == TileType.Dirt) 
+                                SpawnImpactEffects(pos, ActionType.Shovel);
+                        }
+                    }
+
+                    // Evaluate paint additions
+                    if (newType == TileType.Canvas && !string.IsNullOrEmpty(hexColor))
+                    {
+                        string cleanHex = hexColor.Trim('#'); 
+                        bool isNewPaint = !_paintedPixels.ContainsKey(pos);
+                        bool isDifferentColor = isNewPaint || _paintedPixels[pos].ToHtml(false) != cleanHex;
+
+                        if (isDifferentColor)
+                        {
+                            _paintedPixels[pos] = new Color(hexColor);
+                            localMapChanged = true;
+                            SpawnImpactEffects(pos, ActionType.Paintbrush, hexColor);
+                        }
+                    }
+                    // Remote paint deletion
+                    else if (newType == TileType.Canvas && string.IsNullOrEmpty(hexColor) && _paintedPixels.ContainsKey(pos))
+                    {
+                         _paintedPixels.Remove(pos);
+                         localMapChanged = true;
+                    }
+
+                    if (localMapChanged) mapHasChanged = true;
                 }
             }
-            // Fuerza la actualización visual de la pintura
-            _paintOverlay.QueueRedraw();
+            
+            // Queue redraw only if data changes occurred to optimize rendering
+            if (mapHasChanged) 
+            {
+                _paintOverlay.QueueRedraw();
+                CalculateInitialCleanliness(); 
+            }
         });
 
+        // Fetch Player Stats & Detect Recruitment Bonus
         SupabaseManager.Instance.GetPlayerStats(_activePlayerNick, (myStats) => 
         {
             if (myStats != null && myStats.ContainsKey("action_points"))
             {
                 int serverEnergy = myStats["action_points"].AsInt32();
 
-                // [CORTAFUEGOS ANTI-REBOTE]
-                // Solo aceptamos la energía del servidor si es masivamente mayor a la local (El bono de +50).
-                // Esto evita que recuperes 1 punto mágicamente por el ligero retraso de internet al hacer clic.
+                // Anti-bounce validation: Apply only massive energy spikes (+50 bonus)
                 if (serverEnergy >= _currentActionPoints + 40) 
                 {
-                    GD.Print("[RED] ¡NUEVO RECLUTA DETECTADO! Bono de energía recibido en tiempo real.");
-                    // --- NUEVO: DISPARADOR DE RECLUTA ---
-                    ShowFloatingMessage("¡NUEVO RECLUTA SE HA UNIDO! +50 Energía", new Color(0.2f, 0.8f, 1.0f));
+                    ShowFloatingMessage("NEW RECRUIT JOINED! +50 Energy", new Color(0.2f, 0.8f, 1.0f));
                     _currentActionPoints = serverEnergy;
                     UpdateEnergyUI();
 
-                    // --- INYECCIÓN EN TIEMPO REAL ---
-                    // Si el panel de red está abierto en este instante, ordénale redibujar toda la malla
                     if (_networkLayer != null && IsInstanceValid(_networkLayer)) RefreshNetworkGraph();
-
-                    // --- INYECCIÓN EN TIEMPO REAL: PUNTUACIONES ---
-                    // Si el panel de Puntuaciones está abierto, descarga y reordena los nuevos datos
                     if (_leaderboardLayer != null && IsInstanceValid(_leaderboardLayer)) RefreshLeaderboardData();
                 }
             }
@@ -364,15 +455,11 @@ public partial class GridManager : TileMap
     private void DrawCoordinatesOverlay()
     {
         Font defaultFont = ThemeDB.FallbackFont;
-        
-        // 1. Aumentamos la resolución nativa de la fuente x5
         int fontSize = 25; 
-        float densityMultiplier = 5.0f; // Compensador matemático
+        float densityMultiplier = 5.0f; 
         
         Color textColor = new Color(0.0f, 0.0f, 0.0f, 0.95f);
         Color outlineColor = new Color(1.0f, 1.0f, 1.0f, 0.8f); 
-        
-        // 2. Aumentamos también el grosor del borde en la misma proporción x5
         int outlineSize = 10; 
 
         for (int x = 0; x < GridSize.X; x++)
@@ -384,8 +471,6 @@ public partial class GridManager : TileMap
                 Vector2 tileCenter = MapToLocal(new Vector2I(x, y));
 
                 Vector2 stringSize = defaultFont.GetStringSize(coordText, HorizontalAlignment.Left, -1, fontSize);
-                
-                // 3. Multiplicamos la posición espacial por la densidad para que encaje perfecto
                 Vector2 drawPos = (tileCenter * densityMultiplier) + new Vector2(-stringSize.X / 2, stringSize.Y / 3);
                 
                 _coordinateOverlay.DrawStringOutline(defaultFont, drawPos, coordText, HorizontalAlignment.Left, -1, fontSize, outlineSize, outlineColor);
@@ -394,31 +479,30 @@ public partial class GridManager : TileMap
         }
     }
 
-    // 1. GENERACIÓN PROCEDIMENTAL DEL HUD (Lógica Dura)
+    // --- PROCEDURAL UI GENERATION ---
     private void InitializeProceduralUI()
     {
-        // El Cursor (¡Ahora ignora los clics del ratón!)
+        // Cursor setup (Mouse collision disabled)
         _cursorRect = new ReferenceRect { 
             BorderColor = new Color(0.2f, 0.8f, 1.0f), 
             BorderWidth = 3.0f, 
             EditorOnly = false, 
             Size = (Vector2)TileSet.TileSize, 
             ZIndex = 10,
-            MouseFilter = Control.MouseFilterEnum.Ignore // BLINDAJE ANTICOLISIONES
+            MouseFilter = Control.MouseFilterEnum.Ignore 
         };
         
-        _toolIcon = new Label { 
-            Text = "🖌", 
-            HorizontalAlignment = HorizontalAlignment.Center, 
-            VerticalAlignment = VerticalAlignment.Center, 
+        _toolIcon = new TextureRect { 
+            Texture = GD.Load<Texture2D>("res://Resource/Icons/Pencil.png"), 
+            ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
+            StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered,
             Size = (Vector2)TileSet.TileSize,
-            MouseFilter = Control.MouseFilterEnum.Ignore // BLINDAJE ANTICOLISIONES
+            MouseFilter = Control.MouseFilterEnum.Ignore
         };
         
         _cursorRect.AddChild(_toolIcon);
         AddChild(_cursorRect);
 
-        // El Canvas de la UI
         CanvasLayer hudLayer = new CanvasLayer();
         HBoxContainer toolBar = new HBoxContainer();
         toolBar.SetAnchorsPreset(Control.LayoutPreset.BottomWide);
@@ -426,110 +510,114 @@ public partial class GridManager : TileMap
         toolBar.Alignment = BoxContainer.AlignmentMode.Center;
         toolBar.AddThemeConstantOverride("separation", 20);
 
-        // Botones de Herramientas (Estos SÍ deben interceptar clics)
-        Button btnBrush = new Button { Text = "🖌 Pincel" };
-        Button btnShovel = new Button { Text = "⚒ Pala" };
-        Button btnPickaxe = new Button { Text = "⛏ Pico" };
+        // 1. Tool Logic Initialization
+        Button btnBrush = new Button { Icon = GD.Load<Texture2D>("res://Resource/Icons/Pencil.png"), ExpandIcon = true, CustomMinimumSize = new Vector2(65, 60) };
+        Button btnShovel = new Button { Icon = GD.Load<Texture2D>("res://Resource/Icons/Shovel.png"), ExpandIcon = true, CustomMinimumSize = new Vector2(65, 60) };
+        Button btnPickaxe = new Button { Icon = GD.Load<Texture2D>("res://Resource/Icons/Pickaxe.png"), ExpandIcon = true, CustomMinimumSize = new Vector2(65, 60) };
+        Button btnEyedropper = new Button { Icon = GD.Load<Texture2D>("res://Resource/Icons/Eyedropper.png"), ExpandIcon = true, CustomMinimumSize = new Vector2(65, 60) };
 
-        // --- INYECCIÓN DEL BOTÓN DE OBJETIVOS ---
-        Button btnObjectives = new Button { Text = "📋 OBJETIVOS", CustomMinimumSize = new Vector2(150, 40) };
-        btnObjectives.AddThemeColorOverride("font_color", new Color(1.0f, 0.8f, 0.2f)); // Amarillo Neón
+        // 2. System Buttons
+        Button btnObjectives = new Button { Icon = GD.Load<Texture2D>("res://Resource/Icons/Quests.png"), ExpandIcon = true, CustomMinimumSize = new Vector2(60, 45) };
+        Button btnDownloadMap = new Button { Icon = GD.Load<Texture2D>("res://Resource/Icons/Save.png"), ExpandIcon = true, CustomMinimumSize = new Vector2(60, 45) };
+        
+        // 3. Event Assignment
+        btnBrush.Pressed += () => UpdateTool(ActionType.Paintbrush, "res://Resource/Icons/Pencil.png", new Color(1, 1, 1));
+        btnShovel.Pressed += () => UpdateTool(ActionType.Shovel, "res://Resource/Icons/Shovel.png", new Color(1, 1, 1));
+        btnPickaxe.Pressed += () => UpdateTool(ActionType.Pickaxe, "res://Resource/Icons/Pickaxe.png", new Color(1, 1, 1));
+        btnEyedropper.Pressed += () => UpdateTool(ActionType.Eyedropper, "res://Resource/Icons/Eyedropper.png", new Color(1, 1, 1));
         btnObjectives.Pressed += OpenObjectivesPanel;
-        
-        btnBrush.Pressed += () => UpdateTool(ActionType.Paintbrush, "🖌", new Color(1, 1, 1));
-        btnShovel.Pressed += () => UpdateTool(ActionType.Shovel, "⚒", new Color(1, 1, 1));
-        btnPickaxe.Pressed += () => UpdateTool(ActionType.Pickaxe, "⛏", new Color(1, 1, 1));
+        btnDownloadMap.Pressed += ExportHighResMap;
 
-        // Selector de Color
-        ColorPickerButton colorPicker = new ColorPickerButton();
-        colorPicker.CustomMinimumSize = new Vector2(50, 40);
-        colorPicker.Color = CurrentPaintColor;
-        colorPicker.ColorChanged += (Color newColor) => CurrentPaintColor = newColor;
+        // 4. Color Picker Binding
+        _colorPickerBtn = new ColorPickerButton();
+        _colorPickerBtn.CustomMinimumSize = new Vector2(65, 60);
+        _colorPickerBtn.Color = CurrentPaintColor;
+        _colorPickerBtn.ColorChanged += (Color newColor) => CurrentPaintColor = newColor;
 
-        // Botones de Control de Lente
-        Button btnZoomIn = new Button { Text = "🔍+" };
-        Button btnZoomOut = new Button { Text = "🔍-" };
-        
-        btnZoomIn.Pressed += () => AdjustZoom(1.2f); // Aumenta el zoom un 20%
-        btnZoomOut.Pressed += () => AdjustZoom(0.8f); // Reduce el zoom un 20%
+        // 5. Camera & Coordinate Controls
+        Button btnZoomIn = new Button { Icon = GD.Load<Texture2D>("res://Resource/Icons/Zoom+.png"), ExpandIcon = true, CustomMinimumSize = new Vector2(50, 45) };
+        Button btnZoomOut = new Button { Icon = GD.Load<Texture2D>("res://Resource/Icons/Zoom-.png"), ExpandIcon = true, CustomMinimumSize = new Vector2(50, 45) };
+        btnZoomIn.Pressed += () => AdjustZoom(1.2f); 
+        btnZoomOut.Pressed += () => AdjustZoom(0.8f);
 
-        // --- INYECCIÓN: INTERRUPTOR DE COORDENADAS ---
-        Button btnToggleCords = new Button { Text = "#️⃣ +/-", CustomMinimumSize = new Vector2(70, 40) };
-        btnToggleCords.AddThemeColorOverride("font_color", new Color(0.8f, 0.8f, 0.8f)); // Color por defecto
-
-        // --- INYECCIÓN: BOTÓN DE PUNTUACIONES ---
-        Button btnLeaderboard = new Button { Text = "🏆 TOP GLOBAL", CustomMinimumSize = new Vector2(150, 40) };
-        btnLeaderboard.AddThemeColorOverride("font_color", new Color(1.0f, 0.8f, 0.2f)); // Amarillo Neón
-        btnLeaderboard.Pressed += OpenLeaderboardPanel;
-        
-        // Conectamos el clic para invertir la visibilidad (Si es true, la hace false. Si es false, la hace true)
+        Button btnToggleCords = new Button { Icon = GD.Load<Texture2D>("res://Resource/Icons/Pin.png"), ExpandIcon = true, CustomMinimumSize = new Vector2(50, 45) };
         btnToggleCords.Pressed += () => 
         {
             _coordinateOverlay.Visible = !_coordinateOverlay.Visible;
-            
-            // Retroalimentación visual: El botón se oscurece si las apagas, y se ilumina si las enciendes
-            if (_coordinateOverlay.Visible)
-                btnToggleCords.AddThemeColorOverride("font_color", new Color(0.8f, 0.8f, 0.8f));
-            else
-                btnToggleCords.AddThemeColorOverride("font_color", new Color(0.4f, 0.4f, 0.4f)); 
+            btnToggleCords.Modulate = _coordinateOverlay.Visible ? new Color(1, 1, 1) : new Color(0.4f, 0.4f, 0.4f);
         };
 
-        // --- NUEVO: Botón de Red de Conexiones ---
-        _btnOpenNetwork = new Button { Text = "[ MIS REFUERZOS ]", CustomMinimumSize = new Vector2(200, 40) };
-        _btnOpenNetwork.AddThemeColorOverride("font_color", new Color(0.2f, 0.8f, 0.2f)); // Verde neón
+        // 6. Global Menus (Leaderboard & Network)
+        Button btnLeaderboard = new Button { Icon = GD.Load<Texture2D>("res://Resource/Icons/Trofy.png"), ExpandIcon = true, CustomMinimumSize = new Vector2(60, 45) };
+        btnLeaderboard.Pressed += OpenLeaderboardPanel;
+
+        _btnOpenNetwork = new Button { Icon = GD.Load<Texture2D>("res://Resource/Icons/Group.png"), ExpandIcon = true, CustomMinimumSize = new Vector2(60, 45) };
         _btnOpenNetwork.Pressed += OpenReinforcementsNetwork;
 
+        // 7. Energy System UI
+        HBoxContainer energyBox = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.Center };
+        energyBox.AddThemeConstantOverride("separation", 8);
 
-        // Indicador de Energía
-        _actionPointsLabel = new Label { Text = $"⚡ ENERGÍA: {_currentActionPoints} " };
-        _actionPointsLabel.AddThemeColorOverride("font_color", new Color(1.0f, 0.8f, 0.2f)); // Amarillo Neón
-        _actionPointsLabel.VerticalAlignment = VerticalAlignment.Center;
+        TextureRect energyIcon = new TextureRect { 
+            Texture = GD.Load<Texture2D>("res://Resource/Icons/Energy.png"), 
+            ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize, 
+            CustomMinimumSize = new Vector2(30, 30),
+            StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered
+        };
 
-        // Añadimos todo al contenedor horizontal (toolBar)
+        _actionPointsLabel = new Label { Text = _currentActionPoints.ToString() };
+        _actionPointsLabel.AddThemeColorOverride("font_color", new Color(1.0f, 0.8f, 0.2f)); 
+        _actionPointsLabel.AddThemeFontSizeOverride("font_size", 20);
+
+        energyBox.AddChild(energyIcon);
+        energyBox.AddChild(_actionPointsLabel);
+
+        // 8. Toolbar Assembly
         toolBar.AddChild(btnBrush);
         toolBar.AddChild(btnShovel);
         toolBar.AddChild(btnPickaxe);
-        toolBar.AddChild(_actionPointsLabel); // INYECCIÓN AQUÍ
-        toolBar.AddChild(colorPicker);
+        toolBar.AddChild(btnEyedropper); 
+        toolBar.AddChild(energyBox); 
+        toolBar.AddChild(_colorPickerBtn);
         toolBar.AddChild(btnZoomIn);
         toolBar.AddChild(btnZoomOut);
-        toolBar.AddChild(btnToggleCords); // <--- INYECTADO AQUÍ
-        toolBar.AddChild(btnLeaderboard); // <--- AÑADIR AQUÍ
-        toolBar.AddChild(_btnOpenNetwork); // Inyectado de forma segura al final de la barra
-        toolBar.AddChild(btnObjectives); // <--- NUEVO BOTÓN AQUÍ
+        toolBar.AddChild(btnToggleCords);
+        toolBar.AddChild(btnDownloadMap);
+        toolBar.AddChild(btnLeaderboard); 
+        toolBar.AddChild(_btnOpenNetwork); 
+        toolBar.AddChild(btnObjectives); 
         
         hudLayer.AddChild(toolBar);
 
-        // --- PANELES DE PROGRESO SUPERIOR ---
+        // --- UPPER HUD PROGRESS BARS ---
         _totalTiles = GridSize.X * GridSize.Y;
 
         VBoxContainer topBarsContainer = new VBoxContainer();
         topBarsContainer.SetAnchorsPreset(Control.LayoutPreset.TopWide);
-        topBarsContainer.Position = new Vector2(0, 20); // Margen superior
+        topBarsContainer.Position = new Vector2(0, 20); 
         topBarsContainer.Alignment = BoxContainer.AlignmentMode.Center;
         topBarsContainer.AddThemeConstantOverride("separation", 15);
 
-        // Estilos Vectoriales
         StyleBoxFlat bgStyle = new StyleBoxFlat { BgColor = new Color(0.15f, 0.15f, 0.15f, 0.9f), CornerRadiusTopLeft = 5, CornerRadiusTopRight = 5, CornerRadiusBottomLeft = 5, CornerRadiusBottomRight = 5 };
         StyleBoxFlat blueFill = new StyleBoxFlat { BgColor = new Color(0.1f, 0.4f, 0.8f), CornerRadiusTopLeft = 5, CornerRadiusTopRight = 5, CornerRadiusBottomLeft = 5, CornerRadiusBottomRight = 5 };
         StyleBoxFlat greenFill = new StyleBoxFlat { BgColor = new Color(0.2f, 0.7f, 0.3f), CornerRadiusTopLeft = 5, CornerRadiusTopRight = 5, CornerRadiusBottomLeft = 5, CornerRadiusBottomRight = 5 };
 
-        // 1. Barra de Limpieza del Mapa
+        // Map Cleanliness Bar
         _cleanProgressBar = new ProgressBar { CustomMinimumSize = new Vector2(600, 30), SizeFlagsHorizontal = Control.SizeFlags.ShrinkCenter, ShowPercentage = false, MaxValue = _totalTiles };
         _cleanProgressBar.AddThemeStyleboxOverride("background", bgStyle);
         _cleanProgressBar.AddThemeStyleboxOverride("fill", blueFill);
         
-        Label cleanLabel = new Label { Name = "CustomLabel", Text = "Limpieza del Mapa: 0%", HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        Label cleanLabel = new Label { Name = "CustomLabel", Text = "Map Cleanliness: 0%", HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
         cleanLabel.SetAnchorsPreset(Control.LayoutPreset.FullRect);
         _cleanProgressBar.AddChild(cleanLabel);
 
-        // 2. Barra de Donativos (Tiltify Mockup)
+        // Donation Sync Bar (Tiltify)
         _donationProgressBar = new ProgressBar { CustomMinimumSize = new Vector2(600, 30), SizeFlagsHorizontal = Control.SizeFlags.ShrinkCenter, ShowPercentage = false };
         _donationProgressBar.AddThemeStyleboxOverride("background", bgStyle);
         _donationProgressBar.AddThemeStyleboxOverride("fill", greenFill);
         
-        _donationProgressBar.MaxValue = 50000; // Meta: $50,000
-        _donationProgressBar.Value = 1750;     // Recaudado: $1,750
+        _donationProgressBar.MaxValue = 50000; 
+        _donationProgressBar.Value = 1750;     
         
         Label donationLabel = new Label { Name = "CustomLabel", Text = $"Earthquake Relief: ${_donationProgressBar.Value:N0} / ${_donationProgressBar.MaxValue:N0}", HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
         donationLabel.SetAnchorsPreset(Control.LayoutPreset.FullRect);
@@ -537,25 +625,40 @@ public partial class GridManager : TileMap
 
         topBarsContainer.AddChild(_cleanProgressBar);
 
-        // --- INYECCIÓN DEL BOTÓN DE DONACIÓN ---
-        // Creamos un contenedor horizontal para que la barra y el botón estén lado a lado
         HBoxContainer donationContainer = new HBoxContainer();
         donationContainer.Alignment = BoxContainer.AlignmentMode.Center;
         donationContainer.AddThemeConstantOverride("separation", 15);
-        
-        donationContainer.AddChild(_donationProgressBar); // Metemos la barra existente
+        donationContainer.AddChild(_donationProgressBar); 
 
-        // Creamos el botón con un rojo sutil / coral para llamar la atención
-        Button btnDonate = new Button { Text = "❤️ DONAR", CustomMinimumSize = new Vector2(180, 30) };
+        Button btnDonate = new Button { Text = GetText("DONATE_BTN"), CustomMinimumSize = new Vector2(180, 30) };
         btnDonate.AddThemeColorOverride("font_color", new Color(1.0f, 0.4f, 0.4f)); 
+        btnDonate.Pressed += () => OS.ShellOpen("https://tiltify.com/@baelistick/global-game-jam-venezuela-earthquake-relief-fundraiser?origin=dashboard");
         
-        // El comando OS.ShellOpen le ordena al sistema operativo abrir el navegador web por defecto
-        btnDonate.Pressed += () => OS.ShellOpen("https://tiltify.com/@baelistick/global-game-jam-venezuela-earthquake-relief-fundraiser?origin=dashboard"); // <-- REEMPLAZA CON EL LINK PÚBLICO DE TU CAMPAÑA
-        
-        donationContainer.AddChild(btnDonate); // Metemos el botón al lado de la barra
-        
-        topBarsContainer.AddChild(donationContainer); // Finalmente, añadimos el bloque completo al HUD
-        hudLayer.AddChild(topBarsContainer);
+        donationContainer.AddChild(btnDonate); 
+        topBarsContainer.AddChild(donationContainer); 
+
+        // Online Population Header
+        HBoxContainer onlineBox = new HBoxContainer();
+        onlineBox.SetAnchorsPreset(Control.LayoutPreset.TopRight);
+        onlineBox.Position = new Vector2(-160, 25); 
+        onlineBox.Alignment = BoxContainer.AlignmentMode.End;
+        onlineBox.AddThemeConstantOverride("separation", 10);
+
+        TextureRect onlineIcon = new TextureRect { 
+            Texture = GD.Load<Texture2D>("res://Resource/Icons/Group.png"), 
+            ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize, 
+            CustomMinimumSize = new Vector2(30, 30),
+            StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered
+        };
+        onlineIcon.Modulate = new Color(0.2f, 0.9f, 0.2f); 
+
+        _onlineCountLabel = new Label { Text = "0 Online" };
+        _onlineCountLabel.AddThemeColorOverride("font_color", new Color(0.2f, 0.9f, 0.2f));
+        _onlineCountLabel.AddThemeFontSizeOverride("font_size", 20);
+
+        onlineBox.AddChild(onlineIcon);
+        onlineBox.AddChild(_onlineCountLabel);
+        hudLayer.AddChild(onlineBox);
 
         AddChild(hudLayer);
     }
@@ -564,21 +667,32 @@ public partial class GridManager : TileMap
     {
         if (_actionPointsLabel != null)
         {
-            _actionPointsLabel.Text = $"⚡ ENERGÍA: {_currentActionPoints} ";
+            _actionPointsLabel.Text = _currentActionPoints.ToString();
+            
             if (_currentActionPoints > 0)
-                _actionPointsLabel.AddThemeColorOverride("font_color", new Color(1.0f, 0.8f, 0.2f)); // Amarillo Normal
+                _actionPointsLabel.AddThemeColorOverride("font_color", new Color(1.0f, 0.8f, 0.2f)); 
             else
-                _actionPointsLabel.AddThemeColorOverride("font_color", new Color(0.9f, 0.2f, 0.2f)); // Rojo Alerta
+                _actionPointsLabel.AddThemeColorOverride("font_color", new Color(0.9f, 0.2f, 0.2f)); 
         }
+
+        // Discord RPC Sync
+        DiscordManager.Instance?.UpdatePresence(
+            "Limpiando el ecosistema", 
+            $"Energía Restante: {_currentActionPoints}"
+        );
     }
 
-    private void UpdateTool(ActionType tool, string icon, Color color)
+    private void UpdateTool(ActionType tool, string iconPath, Color color)
     {
         CurrentTool = tool;
-        _toolIcon.Text = icon;
+        _toolIcon.Texture = GD.Load<Texture2D>(iconPath);
         _toolIcon.Modulate = color;
     }
 
+    /// <summary>
+    /// Generates the deterministic noise map using the agreed-upon seed.
+    /// Acts as the environmental baseline before user changes are downloaded.
+    /// </summary>
     private void InitializeLocalGrid()
     {
         Clear();
@@ -597,36 +711,33 @@ public partial class GridManager : TileMap
             }
         }
 
-        UpdateCleanlinessScore();
+        CalculateInitialCleanliness();
     }
 
-    // 5. GENERACIÓN ALEATORIA Y SISTEMA DE DEFENSAS (Lógica Dura)
+    // --- ENVIRONMENTAL EVENT SYSTEM ---
     private void SpawnRandomDebris()
     {
-        // [CORTAFUEGOS INYECTADO] No generar si no hay un operativo conectado
         if (!_isPlayerAuthenticated) return;
 
-        // Evaluación Matemática de los Anillos Perimetrales
-        bool isLayer1Sealed = CheckLayerSealed(0); // Anillo Exterior (Bloquea Roca)
-        bool isLayer2Sealed = CheckLayerSealed(1); // Anillo Interior (Bloquea Tierra)
+        bool isLayer1Sealed = CheckLayerSealed(0); 
+        bool isLayer2Sealed = CheckLayerSealed(1); 
 
-        // --- NUEVO: DISPARADOR DE ANILLOS (VERDE NEÓN) ---
+        // Ring validation & UI triggers
         if (isLayer1Sealed && !_wasRing1Sealed)
         {
             _wasRing1Sealed = true;
-            ShowFloatingMessage("¡ANILLO 1 SELLADO! Invasión de Piedra Bloqueada.", new Color(0.2f, 0.9f, 0.2f));
+            ShowFloatingMessage(GetText("MSG_RING1"), new Color(0.2f, 0.9f, 0.2f));
         }
         if (isLayer2Sealed && !_wasRing2Sealed)
         {
             _wasRing2Sealed = true;
-            // Para el anillo 2, podemos usar un Verde Cian para diferenciarlo un poco, o dejarlo igual
-            ShowFloatingMessage("¡ANILLO 2 SELLADO! Invasión de Tierra Bloqueada.", new Color(0.0f, 0.8f, 0.6f));
+            ShowFloatingMessage(GetText("MSG_RING2"), new Color(0.0f, 0.8f, 0.6f));
         }
 
         if (isLayer1Sealed && isLayer2Sealed)
         {
-            GD.Print("[VICTORIA] Capas 1 y 2 selladas. El ecosistema ha sido dominado por completo.");
-            return; // Bloquea todo el spawn
+            GD.Print("[SYSTEM] All defense rings sealed. Spawning halted.");
+            return; 
         }
 
         int debrisToSpawn = 45; 
@@ -634,7 +745,6 @@ public partial class GridManager : TileMap
         int maxAttempts = 200;  
         int attempts = 0;
 
-        // Establecer permisos de generación
         bool canSpawnStone = !isLayer1Sealed;
         bool canSpawnDirt = !isLayer2Sealed;
 
@@ -646,12 +756,11 @@ public partial class GridManager : TileMap
             int ry = _random.Next(0, GridSize.Y);
             Vector2I randomPos = new Vector2I(rx, ry);
 
-            // Regla Estricta: Solo espacios blancos vírgenes
+            // Strict spawn constraint: only target unpainted canvas
             if (GetTileType(randomPos) == TileType.Canvas && !_paintedPixels.ContainsKey(randomPos))
             {
                 TileType newDebris = TileType.Canvas;
 
-                // Selector de invasión basado en las defensas activas
                 if (canSpawnStone && canSpawnDirt) {
                     newDebris = _random.NextDouble() > 0.5 ? TileType.Stone : TileType.Dirt;
                 } else if (canSpawnStone && !canSpawnDirt) {
@@ -659,24 +768,15 @@ public partial class GridManager : TileMap
                 } else if (!canSpawnStone && canSpawnDirt) {
                     newDebris = TileType.Dirt;
                 } else {
-                    break; // Falla de seguridad (no debería ocurrir por el return superior)
+                    break; 
                 }
                 
                 UpdateTileLocal(randomPos, newDebris, null);
                 spawned++;
             }
         }
-
-        if (spawned > 0)
-        {
-            string report = $"[ECOSISTEMA] Han germinado {spawned} nuevos escombros.";
-            if (isLayer1Sealed) report += " (Roca neutralizada por Capa 1).";
-            if (isLayer2Sealed) report += " (Tierra neutralizada por Capa 2).";
-            GD.Print(report);
-        }
     }
 
-    // Algoritmo de Escaneo Perimetral Vectorial con Radar de Brechas
     private bool CheckLayerSealed(int layer)
     {
         int minX = layer;
@@ -686,33 +786,29 @@ public partial class GridManager : TileMap
 
         if (maxX <= minX || maxY <= minY) return false;
 
-        // Escáner de Eje X (Líneas horizontales superior e inferior)
         for (int x = minX; x <= maxX; x++)
         {
-            if (!IsPixelSealed(new Vector2I(x, minY))) { LogBreach(layer, new Vector2I(x, minY), "Superior"); return false; }
-            if (!IsPixelSealed(new Vector2I(x, maxY))) { LogBreach(layer, new Vector2I(x, maxY), "Inferior"); return false; }
+            if (!IsPixelSealed(new Vector2I(x, minY))) { LogBreach(layer, new Vector2I(x, minY), "Top"); return false; }
+            if (!IsPixelSealed(new Vector2I(x, maxY))) { LogBreach(layer, new Vector2I(x, maxY), "Bottom"); return false; }
         }
 
-        // Escáner de Eje Y (Líneas verticales izquierda y derecha)
         for (int y = minY + 1; y < maxY; y++)
         {
-            if (!IsPixelSealed(new Vector2I(minX, y))) { LogBreach(layer, new Vector2I(minX, y), "Izquierdo"); return false; }
-            if (!IsPixelSealed(new Vector2I(maxX, y))) { LogBreach(layer, new Vector2I(maxX, y), "Derecho"); return false; }
+            if (!IsPixelSealed(new Vector2I(minX, y))) { LogBreach(layer, new Vector2I(minX, y), "Left"); return false; }
+            if (!IsPixelSealed(new Vector2I(maxX, y))) { LogBreach(layer, new Vector2I(maxX, y), "Right"); return false; }
         }
 
         return true; 
     }
 
-    // LÓGICA DURA: Solo verifica si la baldosa ha sido pintada (existe en el diccionario)
     private bool IsPixelSealed(Vector2I pos)
     {
         return _paintedPixels.ContainsKey(pos);
     }
 
-    // Telemetría simplificada
     private void LogBreach(int layer, Vector2I pos, string sector)
     {
-        GD.Print($"[ALERTA] Brecha Capa {layer} | Sector {sector} | Coordenada: {pos} | Estado: VACÍO (Requiere pintura)");
+        GD.Print($"[ALERT] Layer {layer} Breach | Sector {sector} | Coord: {pos} | Status: UNPAINTED");
     }
 
     public override void _Process(double delta)
@@ -728,68 +824,49 @@ public partial class GridManager : TileMap
         else _cursorRect.Visible = false;
     }
 
-    // 6. MOTOR DE ESCALADO VISUAL
     private void AdjustZoom(float factor)
     {
         _currentZoom *= factor;
 
-        // Abrazadera matemática (Clamp) para respetar los límites
         if (_currentZoom < _minZoom) _currentZoom = _minZoom;
         if (_currentZoom > _maxZoom) _currentZoom = _maxZoom;
 
         _devCamera.Zoom = new Vector2(_currentZoom, _currentZoom);
     }
 
-    // 2. RENDERIZADO VECTORIAL SOBRE LA CAPA DE CRISTAL
     private void DrawPaintOverlay()
     {
         Vector2 tileSize = (Vector2)TileSet.TileSize;
         
-        // Dibuja los colores guardados por encima del lienzo blanco
         foreach(var pixel in _paintedPixels)
         {
             _paintOverlay.DrawRect(new Rect2(pixel.Key * tileSize, tileSize), pixel.Value);
         }
 
-        // Dibuja la cuadrícula aquí también para que quede encima de todo
+        // Draws the structural grid above the map layer
         Color gridColor = new Color(0.8f, 0.8f, 0.8f, 0.3f); 
         for (int x = 0; x <= GridSize.X; x++) _paintOverlay.DrawLine(new Vector2(x * tileSize.X, 0), new Vector2(x * tileSize.X, GridSize.Y * tileSize.Y), gridColor);
         for (int y = 0; y <= GridSize.Y; y++) _paintOverlay.DrawLine(new Vector2(0, y * tileSize.Y), new Vector2(GridSize.X * tileSize.X, y * tileSize.Y), gridColor);
     }
 
+    // --- USER INPUT LOGIC ---
     public override void _UnhandledInput(InputEvent @event)
     {
-        // [CORTAFUEGOS] Si no ha ingresado, se ignora cualquier acción física
         if (!_isPlayerAuthenticated) return;
 
-        // MÁQUINA DE ESTADOS Y ATAJOS DE TECLADO
+        // Keyboard hotkeys
         if (@event is InputEventKey keyEvent && keyEvent.Pressed)
         {
-            if (keyEvent.Keycode == Key.Key1) 
-            { 
-                CurrentTool = ActionType.Paintbrush; 
-                _toolIcon.Text = "🖌"; 
-                _toolIcon.Modulate = new Color(1, 1, 1); 
-            }
-            if (keyEvent.Keycode == Key.Key2) 
-            { 
-                CurrentTool = ActionType.Shovel; 
-                _toolIcon.Text = "⚒"; 
-                _toolIcon.Modulate = new Color(1, 1, 1); 
-            }
-            if (keyEvent.Keycode == Key.Key3) 
-            { 
-                CurrentTool = ActionType.Pickaxe; 
-                _toolIcon.Text = "⛏"; 
-                _toolIcon.Modulate = new Color(1, 1, 1); 
-            }
+            if (keyEvent.Keycode == Key.Key1) UpdateTool(ActionType.Paintbrush, "res://Resource/Icons/Pencil.png", new Color(1, 1, 1));
+            if (keyEvent.Keycode == Key.Key2) UpdateTool(ActionType.Shovel, "res://Resource/Icons/Shovel.png", new Color(1, 1, 1));
+            if (keyEvent.Keycode == Key.Key3) UpdateTool(ActionType.Pickaxe, "res://Resource/Icons/Pickaxe.png", new Color(1, 1, 1));
             return;
         }
 
-        // --- DETECCIÓN DE BOTONES DEL RATÓN ---
+        // Mouse Button Interactions
         if (@event is InputEventMouseButton mouseBtnEvent)
         {
-            // 1. SISTEMA DE NAVEGACIÓN (Arrastre con Clic Derecho o Rueda)
+            // Drag Navigation triggers
             if (mouseBtnEvent.ButtonIndex == MouseButton.Right || mouseBtnEvent.ButtonIndex == MouseButton.Middle)
             {
                 if (mouseBtnEvent.Pressed)
@@ -803,65 +880,92 @@ public partial class GridManager : TileMap
                 }
             }
 
-            // 2. LÓGICA CLÁSICA DE INTERACCIÓN (Clic Izquierdo)
+            // Left Click Grid Interaction
             if (mouseBtnEvent.Pressed && mouseBtnEvent.ButtonIndex == MouseButton.Left)
             {
-                // BARRERA DE ENERGÍA
                 if (_currentActionPoints > 0)
                 {
                     ProcessMapInteraction(GetLocalMousePosition());
                 }
                 else
                 {
-                    GD.PrintErr("[SISTEMA] Energía agotada. Espere la recarga o llame a sus refuerzos.");
-                    UpdateEnergyUI(); // Fuerza el color rojo
+                    GD.PrintErr("[SYSTEM] Energy depleted. Waiting for recharge.");
+                    UpdateEnergyUI(); 
                 }
             }
         }
 
-        // --- SISTEMA DE PANEADO EN TIEMPO REAL ---
+        // Mouse Motion Panning
         if (@event is InputEventMouseMotion mouseMotionEvent)
         {
             if (_isDragging)
             {
-                // Calculamos cuánto se movió el ratón en la pantalla
                 Vector2 delta = mouseMotionEvent.Position - _lastMousePosition;
-                
-                // Aplicamos el movimiento a la cámara de forma inversa y compensada por el zoom
                 _devCamera.Position -= delta * (1.0f / _devCamera.Zoom.X);
-                
-                // Refrescamos la memoria de la posición para el siguiente fotograma
                 _lastMousePosition = mouseMotionEvent.Position;
             }
         }
 
-        // --- INYECCIÓN: LÓGICA DURA DE NAVEGACIÓN TÁCTIL ---
-        if (@event is InputEventScreenDrag dragEvent)
+        // Multi-touch Pinch-to-Zoom logic
+        if (@event is InputEventScreenTouch touchEvent)
         {
-            // Si la cámara es válida, invertimos el vector de arrastre para simular "agarrar" el terreno
-            if (_devCamera != null)
+            if (touchEvent.Pressed)
             {
-                // Multiplicamos por la inversa del zoom para que el arrastre se sienta proporcional
-                // sin importar si estás muy cerca o muy lejos del mapa
-                _devCamera.Position -= dragEvent.Relative * (1.0f / _devCamera.Zoom.X);
+                _activeTouches[touchEvent.Index] = touchEvent.Position;
             }
-            return; // Cortamos la ejecución para no procesar otras entradas
+            else
+            {
+                _activeTouches.Remove(touchEvent.Index);
+                if (_activeTouches.Count < 2) _lastPinchDistance = 0f; 
+            }
+        }
+
+        if (@event is InputEventScreenDrag dragEventMobile)
+        {
+            _activeTouches[dragEventMobile.Index] = dragEventMobile.Position;
+
+            if (_activeTouches.Count == 2)
+            {
+                var enumerator = _activeTouches.GetEnumerator();
+                enumerator.MoveNext();
+                Vector2 pos1 = enumerator.Current.Value;
+                enumerator.MoveNext();
+                Vector2 pos2 = enumerator.Current.Value;
+
+                float currentDistance = pos1.DistanceTo(pos2);
+
+                if (_lastPinchDistance > 0)
+                {
+                    float pinchFactor = currentDistance / _lastPinchDistance;
+                    AdjustZoom(pinchFactor);
+                }
+
+                _lastPinchDistance = currentDistance;
+                return; 
+            }
+            else if (_activeTouches.Count == 1)
+            {
+                if (_devCamera != null)
+                {
+                    _devCamera.Position -= dragEventMobile.Relative * (1.0f / _devCamera.Zoom.X);
+                }
+                return;
+            }
         }
     }
 
-    // Función unificada para procesar la interacción física
     private void ProcessMapInteraction(Vector2 localPosition)
     {
         Vector2I mapPosition = LocalToMap(localPosition);
 
         if (IsWithinBounds(mapPosition))
         {
-            // LÓGICA DURA: Ejecutamos el golpe. Si devuelve TRUE (es decir, sí rompimos o pintamos algo), cobramos el punto de energía.
+            // Execute Action. If valid, deduct action point
             if (ExecuteAction(mapPosition))
             {
                 _currentActionPoints--;
                 UpdateEnergyUI();
-                SupabaseManager.Instance.ConsumirEnergia(_activePlayerNick); // <--- INYECCIÓN
+                SupabaseManager.Instance.ConsumirEnergia(_activePlayerNick); 
                 _rechargeTimer.Start(); 
             }
         }
@@ -876,66 +980,93 @@ public partial class GridManager : TileMap
             case ActionType.Pickaxe:
                 if (currentTile == TileType.Stone) 
                 { 
-                    // Transforma la Piedra en Lienzo (Blanco) y limpia cualquier color
                     UpdateTileLocal(pos, TileType.Canvas, null);
-                    SpawnImpactEffects(pos, ActionType.Pickaxe); // <--- INYECCIÓN VFX
-                    GD.Print($"[ÉXITO] Piedra destruida en {pos}. Ahora es Lienzo Blanco.");
-                    
-                    // DISPARADOR DE TELEMETRÍA (Lógica Dura)
+                    SpawnImpactEffects(pos, ActionType.Pickaxe); 
                     SupabaseManager.Instance.IncrementUserStat(_activePlayerNick, "piedra");
                     return true; 
                 }
-                GD.Print($"[FALLO] El Pico solo rompe Piedra. Bloque actual: {currentTile}");
                 break;
 
             case ActionType.Shovel:
                 if (currentTile == TileType.Dirt) 
                 { 
-                    // Transforma la Tierra en Lienzo (Blanco) y limpia cualquier color
                     UpdateTileLocal(pos, TileType.Canvas, null);
-                    SpawnImpactEffects(pos, ActionType.Shovel); // <--- INYECCIÓN VFX
-                    GD.Print($"[ÉXITO] Tierra removida en {pos}. Ahora es Lienzo Blanco.");
-                    
-                    // DISPARADOR DE TELEMETRÍA (Lógica Dura)
+                    SpawnImpactEffects(pos, ActionType.Shovel); 
                     SupabaseManager.Instance.IncrementUserStat(_activePlayerNick, "tierra");
                     return true; 
                 }
-                GD.Print($"[FALLO] La Pala solo remueve Tierra. Bloque actual: {currentTile}");
                 break;
 
             case ActionType.Paintbrush:
                 if (currentTile == TileType.Canvas) 
                 { 
-                    // Solo si es Lienzo Blanco, extrae el color del UI y lo aplica
                     string hexColor = "#" + CurrentPaintColor.ToHtml(false);
-                    UpdateTileLocal(pos, TileType.Canvas, hexColor); 
-                    SpawnImpactEffects(pos, ActionType.Paintbrush, hexColor); // <--- INYECCIÓN VFX
-                    GD.Print($"[ÉXITO] Lienzo pintado con color {hexColor} en {pos}.");
                     
-                    // DISPARADOR DE TELEMETRÍA (Lógica Dura)
-                    SupabaseManager.Instance.IncrementUserStat(_activePlayerNick, "pintura");
-                    return true; 
+                    bool isMyTile = _myPixels.Contains(pos);
+                    
+                    UpdateTileLocal(pos, TileType.Canvas, hexColor, _activePlayerNick); 
+                    SpawnImpactEffects(pos, ActionType.Paintbrush, hexColor); 
+                    
+                    if (isMyTile)
+                    {
+                        return false; // Energy exemption for overriding owned tiles
+                    }
+                    else
+                    {
+                        SupabaseManager.Instance.IncrementUserStat(_activePlayerNick, "pintura");
+                        return true; 
+                    }
                 }
-                GD.Print($"[FALLO] El Pincel solo pinta sobre Lienzo Blanco. Bloque actual: {currentTile}. ¡Límpialo primero!");
                 break;
+
+            case ActionType.Eyedropper:
+                if (_paintedPixels.ContainsKey(pos))
+                {
+                    CurrentPaintColor = _paintedPixels[pos];
+                    _colorPickerBtn.Color = CurrentPaintColor; 
+                    
+                    UpdateTool(ActionType.Paintbrush, "res://Resource/Icons/Pencil.png", new Color(1, 1, 1)); 
+                }
+                else if (currentTile == TileType.Canvas)
+                {
+                    CurrentPaintColor = new Color(1, 1, 1); 
+                    _colorPickerBtn.Color = CurrentPaintColor;
+                    
+                    UpdateTool(ActionType.Paintbrush, "res://Resource/Icons/Pencil.png", new Color(1, 1, 1));
+                }
+                return false; 
         }
         
         return false;
     }
 
-    private void UpdateTileLocal(Vector2I pos, TileType type, string hexColor)
+    private void UpdateTileLocal(Vector2I pos, TileType type, string hexColor, string ownerNick = null)
     {
+        TileType oldType = GetTileType(pos); 
+
         SetTile(pos, type);
         
-        if (hexColor != null) _paintedPixels[pos] = new Color(hexColor);
-        else _paintedPixels.Remove(pos);
+        if (hexColor != null) 
+        {
+            _paintedPixels[pos] = new Color(hexColor);
+            if (ownerNick == _activePlayerNick) _myPixels.Add(pos);
+        }
+        else 
+        {
+            _paintedPixels.Remove(pos);
+            _myPixels.Remove(pos); 
+        }
         
-        // ORDENAMOS REDIBUJAR LA CAPA DE CRISTAL
         _paintOverlay.QueueRedraw(); 
+        SupabaseManager.Instance.SavePixel(pos.X, pos.Y, (int)type, hexColor, ownerNick);
 
-        SupabaseManager.Instance.SavePixel(pos.X, pos.Y, (int)type, hexColor);
+        // Performance Optimization: Arithmetic tally rather than full grid scans
+        if (oldType != TileType.Canvas && type == TileType.Canvas) 
+            _currentCleanCount++; 
+        else if (oldType == TileType.Canvas && type != TileType.Canvas) 
+            _currentCleanCount--;
 
-        UpdateCleanlinessScore();
+        RefreshCleanlinessUI(); 
     }
 
     private void SetTile(Vector2I pos, TileType type)
@@ -963,36 +1094,39 @@ public partial class GridManager : TileMap
         return pos.X >= 0 && pos.X < GridSize.X && pos.Y >= 0 && pos.Y < GridSize.Y;
     }
 
-    // 7. MOTOR DE MÉTRICAS Y PROGRESO
-    private void UpdateCleanlinessScore()
+    // --- METRICS & GOALS ENGINE ---
+    private void CalculateInitialCleanliness()
     {
-        if (_cleanProgressBar == null) return;
-
-        int cleanCount = 0;
+        _currentCleanCount = 0;
         for (int x = 0; x < GridSize.X; x++)
         {
             for (int y = 0; y < GridSize.Y; y++)
             {
                 if (GetTileType(new Vector2I(x, y)) == TileType.Canvas)
                 {
-                    cleanCount++;
+                    _currentCleanCount++;
                 }
             }
         }
-        
-        _cleanProgressBar.Value = cleanCount;
-        // Opcional: Actualizar el texto para que muestre el % de limpieza
-        _cleanProgressBar.GetNode<Label>("CustomLabel").Text = $"Limpieza del Mapa: {((float)cleanCount / _totalTiles * 100):0.0}%";
+        RefreshCleanlinessUI();
     }
 
-    // Envía la petición a los servidores de Tiltify
-    // Fase 1: Negociación de Credenciales con Tiltify
+    private void RefreshCleanlinessUI()
+    {
+        if (_cleanProgressBar == null) return;
+        
+        _cleanProgressBar.Value = _currentCleanCount;
+        float percentage = ((float)_currentCleanCount / _totalTiles) * 100.0f;
+        string prefix = GetText("CLEANLINESS_PREFIX");
+        _cleanProgressBar.GetNode<Label>("CustomLabel").Text = $"{prefix}{percentage:0.0}%";
+    }
+
+    // Phase 1: Tiltify Credentials Negotiation
     private void RequestTiltifyToken()
     {
         string url = "https://v5api.tiltify.com/oauth/token";
         string[] headers = new string[] { "Content-Type: application/json" };
         
-        // Empaquetamos tus credenciales en JSON
         var authData = new Godot.Collections.Dictionary
         {
             { "client_id", _clientId },
@@ -1004,7 +1138,6 @@ public partial class GridManager : TileMap
         _tiltifyAuthRequest.Request(url, headers, HttpClient.Method.Post, jsonBody);
     }
 
-    // Recepción y validación de la Llave Maestra
     private void OnTiltifyTokenReceived(long result, long responseCode, string[] headers, byte[] body)
     {
         if (responseCode == 200)
@@ -1017,23 +1150,19 @@ public partial class GridManager : TileMap
                 if (data.ContainsKey("access_token"))
                 {
                     _tiltifyToken = (string)data["access_token"];
-                    GD.Print("[RED] Enlace seguro establecido. Token de acceso generado.");
-                    
-                    // Fase 2: Ahora que somos un cliente autorizado, pedimos los datos
-                    RequestTiltifyData();
+                    RequestTiltifyData(); // Fire Phase 2
                 }
             }
         }
         else
         {
-            GD.PrintErr($"[ERROR OAUTH] Tiltify rechazó el Client ID/Secret. Código: {responseCode}");
+            GD.PrintErr($"[OAUTH ERROR] Tiltify denied credentials. Code: {responseCode}");
         }
     }
 
-    // Fase 2: Búsqueda de datos de la Campaña
+    // Phase 2: Tiltify Campaign Data Search
     private void RequestTiltifyData()
     {
-        // Bloqueo de seguridad: No pedir datos si la Fase 1 no ha terminado
         if (string.IsNullOrEmpty(_tiltifyToken)) return;
 
         string url = $"https://v5api.tiltify.com/api/public/campaigns/{_tiltifyCampaignId}";
@@ -1045,39 +1174,32 @@ public partial class GridManager : TileMap
         _tiltifyDataRequest.Request(url, headers, HttpClient.Method.Get);
     }
 
-    // Procesa la respuesta de Tiltify
     private void OnTiltifyDataReceived(long result, long responseCode, string[] headers, byte[] body)
     {
-        if (responseCode == 200) // 200 significa "Éxito Absoluto"
+        if (responseCode == 200) 
         {
             string jsonString = System.Text.Encoding.UTF8.GetString(body);
-            
-            // Usamos el parseador nativo de Godot para desarmar el JSON
             Json json = new Json();
             Error error = json.Parse(jsonString);
 
             if (error == Error.Ok)
             {
-                // Navegamos por la estructura de Lógica Dura del JSON de Tiltify
                 var data = (Godot.Collections.Dictionary)json.Data;
                 var campaignData = (Godot.Collections.Dictionary)data["data"];
                 
-                // Extraemos las variables (Tiltify suele enviarlas como strings con formato de dinero)
                 var amountRaisedObj = (Godot.Collections.Dictionary)campaignData["amount_raised"];
                 var goalObj = (Godot.Collections.Dictionary)campaignData["goal"];
 
                 float amountRaised = amountRaisedObj["value"].AsSingle();
                 float goal = goalObj["value"].AsSingle();
 
-                // --- NUEVO: DISPARADOR DE DONACIÓN ---
                 if (_lastKnownDonationAmount != -1f && amountRaised > _lastKnownDonationAmount)
                 {
                     float difference = amountRaised - _lastKnownDonationAmount;
-                    ShowFloatingMessage($"¡DONATIVO RECIBIDO! (+ ${difference:N0}) ¡El mundo esta con Venezuela 🇻🇪!", new Color(0.2f, 0.9f, 0.4f));
+                    ShowFloatingMessage($"DONATION RECEIVED! (+ ${difference:N0}) Thank you! 🇻🇪", new Color(0.2f, 0.9f, 0.4f));
                 }
-                _lastKnownDonationAmount = amountRaised; // Guardamos el nuevo valor en la memoria
+                _lastKnownDonationAmount = amountRaised; 
 
-                // Actualizamos nuestra interfaz vectorial
                 if (_donationProgressBar != null)
                 {
                     _donationProgressBar.MaxValue = goal;
@@ -1089,16 +1211,11 @@ public partial class GridManager : TileMap
                         donationLabel.Text = $"Earthquake Relief: ${amountRaised:N0} / ${goal:N0}";
                     }
                 }
-                GD.Print($"[RED] Sincronización Tiltify exitosa: ${amountRaised}");
             }
-        }
-        else
-        {
-            GD.PrintErr($"[ERROR DE RED] Tiltify rechazó la conexión. Código: {responseCode}");
         }
     }
 
-    // 8. BARRERA DE INGRESO Y REGISTRO
+    // --- AUTHENTICATION REGISTRATION LAYER ---
     private void InitializeAuthUI()
     {
         _authLayer = new CanvasLayer();
@@ -1107,43 +1224,38 @@ public partial class GridManager : TileMap
         _authScreen = new Control();
         _authScreen.SetAnchorsPreset(Control.LayoutPreset.FullRect);
 
-        // Fondo oscuro
         ColorRect isolationBg = new ColorRect();
         isolationBg.SetAnchorsPreset(Control.LayoutPreset.FullRect);
         isolationBg.Color = new Color(0.05f, 0.05f, 0.05f, 0.95f);
         _authScreen.AddChild(isolationBg);
 
-        // NUEVO: Envoltorio para centrado absoluto
         CenterContainer centerWrapper = new CenterContainer();
         centerWrapper.SetAnchorsPreset(Control.LayoutPreset.FullRect);
         _authScreen.AddChild(centerWrapper);
 
-        // Estructura central del formulario
         VBoxContainer formContainer = new VBoxContainer();
         formContainer.CustomMinimumSize = new Vector2(400, 300);
         formContainer.Alignment = BoxContainer.AlignmentMode.Center;
         formContainer.AddThemeConstantOverride("separation", 20);
         centerWrapper.AddChild(formContainer);
 
-        // Título Dinámico
-        _authTitleLabel = new Label { Text = "REGISTRARSE", HorizontalAlignment = HorizontalAlignment.Center };
+        _authTitleLabel = new Label { Text = GetText("AUTH_REG_TITLE"), HorizontalAlignment = HorizontalAlignment.Center };
         _authTitleLabel.AddThemeColorOverride("font_color", new Color(0.2f, 0.8f, 0.2f)); 
         formContainer.AddChild(_authTitleLabel);
 
-        _nickInput = new LineEdit { PlaceholderText = "INGRESE UN NICK", Alignment = HorizontalAlignment.Center };
+        _nickInput = new LineEdit { PlaceholderText = GetText("NICK_PLACEHOLDER"), Alignment = HorizontalAlignment.Center };
         formContainer.AddChild(_nickInput);
 
-        _passInput = new LineEdit { PlaceholderText = "CONTRASEÑA", Alignment = HorizontalAlignment.Center, Secret = true }; 
+        _passInput = new LineEdit { PlaceholderText = GetText("PASS_PLACEHOLDER"), Alignment = HorizontalAlignment.Center, Secret = true }; 
         formContainer.AddChild(_passInput);
 
         _countrySelector = new OptionButton();
         _countrySelector.Alignment = HorizontalAlignment.Center;
 
-        // Cargamos la fuente de emojis desde los archivos del proyecto
         Font emojiFont = GD.Load<Font>("res://Resource/Fonts/NotoColorEmoji.ttf");
         _countrySelector.AddThemeFontOverride("font", emojiFont);
 
-        // --- BASE DE DATOS REGIONAL Y GLOBAL ---
+        // International ISO standards
         _countrySelector.AddItem("🇦🇷 Argentina", 0);
         _countrySelector.AddItem("🇧🇴 Bolivia", 1);
         _countrySelector.AddItem("🇧🇷 Brasil", 2);
@@ -1167,8 +1279,6 @@ public partial class GridManager : TileMap
         _countrySelector.AddItem("🇩🇴 República Dominicana", 20);
         _countrySelector.AddItem("🇺🇾 Uruguay", 21);
         _countrySelector.AddItem("🇻🇪 Venezuela", 22);
-        
-        // Módulo Intercontinental
         _countrySelector.AddItem("🇩🇪 Alemania", 23);
         _countrySelector.AddItem("🇨🇳 China", 24);
         _countrySelector.AddItem("🇫🇷 Francia", 25);
@@ -1176,50 +1286,47 @@ public partial class GridManager : TileMap
         _countrySelector.AddItem("🇯🇵 Japón", 27);
         _countrySelector.AddItem("🇬🇧 Reino Unido", 28);
         _countrySelector.AddItem("🇷🇺 Rusia", 29);
-        
-        // Fallback del Ecosistema
         _countrySelector.AddItem("🇺🇳 Otra / Global", 30);
 
         formContainer.AddChild(_countrySelector);
 
-        // --- NUEVA INYECCIÓN: CAMPO DEL RECLUTADOR ---
-        _recruiterInput = new LineEdit { PlaceholderText = "¿QUIÉN TE INVITÓ? (Opcional)", Alignment = HorizontalAlignment.Center };
+        _recruiterInput = new LineEdit { PlaceholderText = GetText("RECRUITER_PLACEHOLDER"), Alignment = HorizontalAlignment.Center };
         formContainer.AddChild(_recruiterInput);
 
-        // Botón Principal
-        _submitAuthBtn = new Button { Text = "CONFIRMAR REGISTRO", CustomMinimumSize = new Vector2(0, 50) };
+        _submitAuthBtn = new Button { Text = GetText("BTN_REGISTER"), CustomMinimumSize = new Vector2(0, 50) };
         _submitAuthBtn.Pressed += ProcessLoginAttempt;
         formContainer.AddChild(_submitAuthBtn);
 
-        // NUEVO: Botón para cambiar entre Login y Registro
-        _toggleModeBtn = new Button { Text = "¿Ya tienes un usuario? Iniciar Sesión", Flat = true };
-        _toggleModeBtn.AddThemeColorOverride("font_color", new Color(0.6f, 0.6f, 0.6f)); // Gris sutil
+        _toggleModeBtn = new Button { Text = GetText("TOGGLE_TO_LOGIN"), Flat = true };
+        _toggleModeBtn.AddThemeColorOverride("font_color", new Color(0.6f, 0.6f, 0.6f)); 
         _toggleModeBtn.Pressed += ToggleAuthMode;
         formContainer.AddChild(_toggleModeBtn);
 
         _authLayer.AddChild(_authScreen);
         AddChild(_authLayer);
+
+        LoadCredentials();
     }
 
     private void ToggleAuthMode()
     {
-        _isLoginMode = !_isLoginMode; // Invertimos el estado
+        _isLoginMode = !_isLoginMode; 
 
         if (_isLoginMode)
         {
-            _authTitleLabel.Text = "INICIAR SESION";
-            _countrySelector.Hide(); // Escondemos la bandera
-            _recruiterInput.Hide();  // <--- OCULTAMOS EL CAMPO DE INVITACIÓN
-            _submitAuthBtn.Text = "INICIAR";
-            _toggleModeBtn.Text = "¿Eres Nuevo? Crear Cuenta";
+            _authTitleLabel.Text = GetText("AUTH_LOG_TITLE");
+            _countrySelector.Hide(); 
+            _recruiterInput.Hide();  
+            _submitAuthBtn.Text = GetText("BTN_LOGIN");
+            _toggleModeBtn.Text = GetText("TOGGLE_TO_REG");
         }
         else
         {
-            _authTitleLabel.Text = "REGISTRARSE";
-            _countrySelector.Show(); // Mostramos la bandera
-            _recruiterInput.Show();  // <--- MOSTRAMOS EL CAMPO DE INVITACIÓN
-            _submitAuthBtn.Text = "CONFIRMAR REGISTRO";
-            _toggleModeBtn.Text = "¿Ya tienes un usuario? Iniciar Sesión";
+            _authTitleLabel.Text = GetText("AUTH_REG_TITLE");
+            _countrySelector.Show(); 
+            _recruiterInput.Show();  
+            _submitAuthBtn.Text = GetText("BTN_REGISTER");
+            _toggleModeBtn.Text = GetText("TOGGLE_TO_LOGIN");
         }
     }
 
@@ -1228,74 +1335,56 @@ public partial class GridManager : TileMap
         string nick = _nickInput.Text.Trim();
         string pass = _passInput.Text.Trim();
 
-        if (string.IsNullOrEmpty(nick) || string.IsNullOrEmpty(pass))
-        {
-            GD.PrintErr("[SISTEMA] Acceso denegado: Se requiere Nick y Password.");
-            return;
-        }
+        if (string.IsNullOrEmpty(nick) || string.IsNullOrEmpty(pass)) return;
 
+        _tempPassword = pass; 
         string safePasswordHash = HashPassword(pass);
 
         _submitAuthBtn.Disabled = true;
         _toggleModeBtn.Disabled = true;
-        _submitAuthBtn.Text = "ESTABLECIENDO ENLACE...";
+        _submitAuthBtn.Text = "AUTHENTICATING...";
 
         if (_isLoginMode)
         {
-            GD.Print($"[RED] Solicitando reconexión a base de datos. Nick: {nick}");
             SupabaseManager.Instance.LoginUser(nick, safePasswordHash, OnAuthenticationResult);
         }
         else
         {
             string country = _countrySelector.GetItemText(_countrySelector.Selected);
-            string recruiter = _recruiterInput.Text.Trim(); // <--- CAPTURA DEL TEXTO
+            string recruiter = _recruiterInput.Text.Trim(); 
 
-            // INYECCIÓN DE LAMBDA PARA EVALUAR EL BONO
             SupabaseManager.Instance.RegisterNewUser(nick, safePasswordHash, country, recruiter, (success) => 
             {
                 if (success && !string.IsNullOrEmpty(recruiter))
                 {
                     SupabaseManager.Instance.ActivarBonoNodo(recruiter);
-                    _currentActionPoints += 50; // Reflejo visual inmediato
+                    _currentActionPoints += 50; 
                 }
                 OnAuthenticationResult(success);
             });
-
-            GD.Print($"[RED] Registro. Nick: {nick} | País: {country} | Reclutador: {(string.IsNullOrEmpty(recruiter) ? "Ninguno" : recruiter)}");
         }
     }
 
-    // 3. El Recepcionista de Respuestas
     private void OnAuthenticationResult(bool success)
     {
         if (success)
         {
-            // 1. EL DESBLOQUEO REAL
             string activeNickname = _nickInput.Text.Trim(); 
-            _activePlayerNick = activeNickname; // GUARDAMOS EL DATO EN LA MEMORIA SEGURA
+            _activePlayerNick = activeNickname; 
+
+            SaveCredentials(_activePlayerNick, _tempPassword);
             
             _isPlayerAuthenticated = true;
-            _authLayer.QueueFree(); // Ahora sí, podemos destruir el menú con seguridad
-            GD.Print("[SISTEMA] Enlace autorizado. Despliegue de herramientas tácticas habilitado.");
+            _authLayer.QueueFree(); 
             
-            // 2. PRUEBA TÁCTICA DE CONEXIONES
             SupabaseManager.Instance.GetConnections(_activePlayerNick, (connectionsData) => 
             {
                 if (connectionsData != null && connectionsData.Count > 0)
                 {
-                    GD.Print($"[RED] Escáner completado: Tienes {connectionsData.Count} conexiones directas.");
-                    foreach (Godot.Collections.Dictionary recluta in connectionsData)
-                    {
-                        string n = (string)recluta["nickname"];
-                        string c = (string)recluta["country"];
-                        GD.Print($"  -> Recluta: {n} | Base: {c}");
-                    }
-                }
-                else
-                {
-                    GD.Print("[RED] Escáner completado: Aún no tienes conexiones en tu red.");
+                    GD.Print($"[NETWORK] Scan Complete: {connectionsData.Count} direct connections detected.");
                 }
             });
+
             SupabaseManager.Instance.GetPlayerStats(_activePlayerNick, (myStats) => 
             {
                 if (myStats != null && myStats.ContainsKey("action_points"))
@@ -1307,20 +1396,19 @@ public partial class GridManager : TileMap
         }
         else
         {
-            // 3. RECHAZO: El candado no se abre, reactivamos los botones para otro intento
             _submitAuthBtn.Disabled = false;
             _toggleModeBtn.Disabled = false;
             
             if (_isLoginMode)
-                _submitAuthBtn.Text = "[ ERROR: CREDENCIALES INVÁLIDAS. REINTENTAR ]";
+                _submitAuthBtn.Text = "[ ERROR: INVALID CREDENTIALS ]";
             else
-                _submitAuthBtn.Text = "[ ERROR: NICK EN USO. ELEGIR OTRO ]";
+                _submitAuthBtn.Text = "[ ERROR: NICKNAME UNAVAILABLE ]";
                 
-            _submitAuthBtn.AddThemeColorOverride("font_color", new Color(0.9f, 0.2f, 0.2f)); // Se vuelve rojo
+            _submitAuthBtn.AddThemeColorOverride("font_color", new Color(0.9f, 0.2f, 0.2f)); 
         }
     }
 
-    // 9. PROTOCOLO DE SEGURIDAD (Cifrado SHA-256)
+    // Security Protocol (SHA-256)
     private string HashPassword(string rawPassword)
     {
         using (System.Security.Cryptography.SHA256 sha256Hash = System.Security.Cryptography.SHA256.Create())
@@ -1335,11 +1423,28 @@ public partial class GridManager : TileMap
         }
     }
 
-    // =======================================================
-    // SISTEMA DE COORDENADAS TÁCTICAS
-    // =======================================================
+    private const string CREDENTIALS_PATH = "user://operativo.cfg";
+    private string _tempPassword = ""; 
 
-    // Convierte el índice X (0, 1, 2) en formato alfabético (A, B, C... AA, AB)
+    private void SaveCredentials(string nick, string pass)
+    {
+        ConfigFile config = new ConfigFile();
+        config.SetValue("Auth", "Nick", nick);
+        config.SetValue("Auth", "Pass", pass);
+        config.Save(CREDENTIALS_PATH);
+    }
+
+    private void LoadCredentials()
+    {
+        ConfigFile config = new ConfigFile();
+        if (config.Load(CREDENTIALS_PATH) == Error.Ok)
+        {
+            _nickInput.Text = (string)config.GetValue("Auth", "Nick", "");
+            _passInput.Text = (string)config.GetValue("Auth", "Pass", "");
+        }
+    }
+
+    // --- TACTICAL COORDINATES CONVERTER ---
     private string GetColumnName(int index)
     {
         int dividend = index + 1;
@@ -1355,10 +1460,7 @@ public partial class GridManager : TileMap
         return columnName;
     }
 
-    // =======================================================
-    // RENDERIZADO VISUAL DE LA RED DE CONEXIONES
-    // =======================================================
-
+    // --- NETWORK GRAPH UI ENGINE ---
     private void OpenReinforcementsNetwork()
     {
         if (_networkLayer != null && IsInstanceValid(_networkLayer)) return;
@@ -1373,7 +1475,7 @@ public partial class GridManager : TileMap
         _networkGraph.SetAnchorsPreset(Control.LayoutPreset.FullRect);
         _networkLayer.AddChild(_networkGraph);
 
-        Button btnClose = new Button { Text = "[ X ] CERRAR RED", CustomMinimumSize = new Vector2(150, 40) };
+        Button btnClose = new Button { Text = "[ X ]", CustomMinimumSize = new Vector2(150, 40) };
         btnClose.SetAnchorsPreset(Control.LayoutPreset.TopRight); 
         btnClose.Position = new Vector2(-170, 20); 
         btnClose.AddThemeColorOverride("font_color", new Color(0.9f, 0.2f, 0.2f));
@@ -1381,8 +1483,6 @@ public partial class GridManager : TileMap
         _networkLayer.AddChild(btnClose);
 
         AddChild(_networkLayer);
-
-        // Disparamos la generación de la red
         RefreshNetworkGraph();
     }
 
@@ -1390,7 +1490,6 @@ public partial class GridManager : TileMap
     {
         if (_networkGraph == null || !IsInstanceValid(_networkGraph)) return;
 
-        // Limpiamos la pantalla por si es una actualización en tiempo real
         foreach (Node child in _networkGraph.GetChildren()) { if (child is GraphNode) child.QueueFree(); }
         _networkGraph.ClearConnections();
 
@@ -1398,7 +1497,6 @@ public partial class GridManager : TileMap
         {
             if (!IsInstanceValid(_networkGraph) || allUsers == null) return;
             
-            // 1. Convertimos la lista en un Diccionario Rápido para buscar por Nickname
             Dictionary<string, Godot.Collections.Dictionary> userMap = new Dictionary<string, Godot.Collections.Dictionary>();
             foreach (var u in allUsers)
             {
@@ -1411,30 +1509,24 @@ public partial class GridManager : TileMap
             var myData = userMap[_activePlayerNick];
             string myParentNick = myData.ContainsKey("invited_by") ? myData["invited_by"].AsString() : "";
             int currentY = 50;
+            string mySafeName = _activePlayerNick.Replace(" ", ""); 
 
-            string mySafeName = _activePlayerNick.Replace(" ", ""); // Evita errores visuales en las líneas del Graph
-
-            // 2. ¿Tenemos un Reclutador (Padre)? Si es así, lo dibujamos arriba.
             if (!string.IsNullOrEmpty(myParentNick) && userMap.ContainsKey(myParentNick))
             {
                 string safeParentName = myParentNick.Replace(" ", "");
-                DrawNodeFromData(userMap[myParentNick], safeParentName, myParentNick, "Jefe de Nodo", new Vector2(100, currentY));
-                
-                DrawNodeFromData(myData, mySafeName, _activePlayerNick, "Tú", new Vector2(500, currentY));
+                DrawNodeFromData(userMap[myParentNick], safeParentName, myParentNick, GetText("RANK_BOSS"), new Vector2(100, currentY));
+                DrawNodeFromData(myData, mySafeName, _activePlayerNick, GetText("RANK_YOU"), new Vector2(500, currentY));
                 _networkGraph.ConnectNode(safeParentName, 0, mySafeName, 0);
             }
             else
             {
-                // Si no fuimos invitados por nadie, somos la raíz pura
-                DrawNodeFromData(myData, mySafeName, _activePlayerNick, "Tú (Nodo Raíz)", new Vector2(100, currentY));
+                DrawNodeFromData(myData, mySafeName, _activePlayerNick, GetText("RANK_ROOT"), new Vector2(100, currentY));
             }
 
-            // 3. Disparamos la recursividad fractal para dibujar a nuestros Hijos, Nietos, etc.
             DrawFractalChildren(userMap, _activePlayerNick, mySafeName, currentY + 200);
         });
     }
 
-    // El Algoritmo Fractal (Lógica Dura)
     private int DrawFractalChildren(Dictionary<string, Godot.Collections.Dictionary> userMap, string targetNick, string safeTargetName, int startY)
     {
         int currentY = startY;
@@ -1449,19 +1541,15 @@ public partial class GridManager : TileMap
             {
                 string safeChildName = childNick.Replace(" ", "");
                 
-                // Buscamos la posición X de nuestro padre para dibujarnos a su derecha
                 GraphNode parentNode = _networkGraph.GetNodeOrNull<GraphNode>(safeTargetName);
                 float parentX = parentNode != null ? parentNode.PositionOffset.X : 100;
                 
                 Vector2 childPos = new Vector2(parentX + 400, currentY);
-                DrawNodeFromData(childData, safeChildName, childNick, "Recluta", childPos);
+                DrawNodeFromData(childData, safeChildName, childNick, GetText("RANK_RECRUIT"), childPos);
                 
                 _networkGraph.ConnectNode(safeTargetName, 0, safeChildName, 0);
                 
-                // ¡AUTO-LLAMADA! El algoritmo entra dentro del hijo para buscarle sus propios reclutas
                 int nextY = DrawFractalChildren(userMap, childNick, safeChildName, currentY);
-                
-                // Desplazamos el eje Y para que el siguiente hermano no se dibuje encima
                 currentY = nextY > currentY ? nextY : currentY + 160;
             }
         }
@@ -1480,15 +1568,10 @@ public partial class GridManager : TileMap
         _networkGraph.AddChild(node);
     }
 
-    // Crea las "cajas" individuales que se conectan con los hilos
-    // Crea las "cajas" individuales que se conectan con los hilos
-    // Crea las "cajas" individuales que se conectan con los hilos
     private GraphNode CreatePlayerNode(string idName, string nick, string country, string rank, int blocks, int tierra, int piedra, int pintura, Vector2 position)
     {
         GraphNode node = new GraphNode();
         node.Name = idName;
-
-        // 1. Título minimalista (Sin emojis que rompan Windows)
         node.Title = $"[{rank}] {nick}";
         node.PositionOffset = position; 
         node.SetSlot(0, true, 0, new Color(0.2f, 0.8f, 0.2f), true, 0, new Color(0.2f, 0.8f, 0.2f));
@@ -1497,32 +1580,28 @@ public partial class GridManager : TileMap
         box.Name = "DataContainer"; 
         node.AddChild(box);
 
-        // --- 2. MOTOR DE RENDERIZADO DE BANDERAS SVG ---
-        string isoCode = "un"; // Archivo por defecto (Naciones Unidas / Global)
+        string isoCode = "un"; 
         string cleanCountry = "Otra / Global";
 
-        // Escaneamos la variable 'country' que viene de Supabase para hallar coincidencias
         foreach (var pair in _countryToIso)
         {
             if (country.Contains(pair.Key))
             {
-                isoCode = pair.Value; // Asignamos el código (ej. "ve")
-                cleanCountry = pair.Key; // Asignamos el nombre limpio ("Venezuela")
+                isoCode = pair.Value; 
+                cleanCountry = pair.Key; 
                 break;
             }
         }
 
-        // Construimos el contenedor horizontal para la bandera y el texto
         HBoxContainer headerBox = new HBoxContainer();
-        headerBox.Alignment = BoxContainer.AlignmentMode.Begin; // <-- LÓGICA DURA CORREGIDA
+        headerBox.Alignment = BoxContainer.AlignmentMode.Begin; 
         headerBox.AddThemeConstantOverride("separation", 8);
 
         TextureRect flagIcon = new TextureRect();
-        flagIcon.CustomMinimumSize = new Vector2(24, 24); // El tamaño 1x1 asegurado
+        flagIcon.CustomMinimumSize = new Vector2(24, 24); 
         flagIcon.ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize;
         flagIcon.StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered;
         
-        // Cargamos la imagen SVG desde los archivos. El 'ResourceLoader' evita que el juego crashee si falta un SVG.
         string flagPath = $"res://UI/Flags/{isoCode}.svg";
         if (ResourceLoader.Exists(flagPath))
         {
@@ -1537,28 +1616,23 @@ public partial class GridManager : TileMap
         headerBox.AddChild(countryLabel);
         box.AddChild(headerBox);
 
-        // Línea separadora tecnológica
         HSeparator separator = new HSeparator();
         separator.AddThemeConstantOverride("separation", 10);
         box.AddChild(separator);
 
-        // 3. Estadísticas Base
         Label statsLabel = new Label();
         statsLabel.Name = "StatsLabel";
-        statsLabel.Text = $"Bloques Totales: {blocks}\n[ Tierra: {tierra} | Piedra: {piedra} | Pintura: {pintura} ]";
+        statsLabel.Text = string.Format(GetText("STATS_BLOCKS_FORMAT"), blocks, tierra, piedra, pintura);
         statsLabel.AddThemeColorOverride("font_color", new Color(0.7f, 0.7f, 0.7f));
         box.AddChild(statsLabel);
 
         return node;
     }
 
-    // =======================================================
-    // MOTOR DE OBJETIVOS Y MÉTRICAS (Lógica Dura)
-    // =======================================================
-
+    // --- OBJECTIVES & METRICS UI ---
     private void OpenObjectivesPanel()
     {
-        CanvasLayer objLayer = new CanvasLayer { Layer = 95 }; // Por encima de casi todo
+        CanvasLayer objLayer = new CanvasLayer { Layer = 95 }; 
 
         ColorRect bg = new ColorRect { Color = new Color(0.05f, 0.05f, 0.05f, 0.98f) };
         bg.SetAnchorsPreset(Control.LayoutPreset.FullRect);
@@ -1572,23 +1646,18 @@ public partial class GridManager : TileMap
         box.AddThemeConstantOverride("separation", 25);
         center.AddChild(box);
 
-        Label title = new Label { Text = "SISTEMA DE OBJETIVOS GLOBALES", HorizontalAlignment = HorizontalAlignment.Center };
+        Label title = new Label { Text = _isEnglish ? "GLOBAL OBJECTIVES SYSTEM" : "SISTEMA DE OBJETIVOS GLOBALES", HorizontalAlignment = HorizontalAlignment.Center };
         title.AddThemeColorOverride("font_color", new Color(1.0f, 0.8f, 0.2f)); 
         box.AddChild(title);
 
-        // --- CÁLCULO EN TIEMPO REAL ---
         int totalTiles = GridSize.X * GridSize.Y;
-        
         int ring0Max = GetRingTotal(0);
         int ring0Cur = GetRingSealedCount(0);
-        
         int ring1Max = GetRingTotal(1);
         int ring1Cur = GetRingSealedCount(1);
-        
         int currentDirt = 0;
         int currentStone = 0;
         
-        // Escaneo profundo del terreno
         for (int x = 0; x < GridSize.X; x++) {
             for (int y = 0; y < GridSize.Y; y++) {
                 TileType t = GetTileType(new Vector2I(x, y));
@@ -1597,14 +1666,13 @@ public partial class GridManager : TileMap
             }
         }
 
-        // --- INYECCIÓN DE LAS 5 BARRAS ---
-        box.AddChild(CreateObjectiveBar("1. SELLAR ANILLO EXTERIOR (Inhibe aparición de Piedra)", ring0Cur, ring0Max, new Color(0.2f, 0.8f, 1.0f)));
-        box.AddChild(CreateObjectiveBar("2. SELLAR ANILLO INTERIOR (Inhibe aparición de Tierra)", ring1Cur, ring1Max, new Color(0.2f, 0.8f, 1.0f)));
-        box.AddChild(CreateObjectiveBar("3. LIMPIAR TODA LA TIERRA", totalTiles - currentDirt, totalTiles, new Color(0.6f, 0.4f, 0.2f)));
-        box.AddChild(CreateObjectiveBar("4. LIMPIAR TODA LA PIEDRA", totalTiles - currentStone, totalTiles, new Color(0.5f, 0.5f, 0.5f)));
-        box.AddChild(CreateObjectiveBar("5. PINTAR EL ECOSISTEMA (Cubrir todo el Lienzo)", _paintedPixels.Count, totalTiles, new Color(0.8f, 0.2f, 0.6f)));
+        box.AddChild(CreateObjectiveBar(GetText("OBJ_1"), ring0Cur, ring0Max, new Color(0.2f, 0.8f, 1.0f)));
+        box.AddChild(CreateObjectiveBar(GetText("OBJ_2"), ring1Cur, ring1Max, new Color(0.2f, 0.8f, 1.0f)));
+        box.AddChild(CreateObjectiveBar(GetText("OBJ_3"), totalTiles - currentDirt, totalTiles, new Color(0.6f, 0.4f, 0.2f)));
+        box.AddChild(CreateObjectiveBar(GetText("OBJ_4"), totalTiles - currentStone, totalTiles, new Color(0.5f, 0.5f, 0.5f)));
+        box.AddChild(CreateObjectiveBar(GetText("OBJ_5"), _paintedPixels.Count, totalTiles, new Color(0.8f, 0.2f, 0.6f)));
 
-        Button btnClose = new Button { Text = "[ VOLVER AL TERRENO ]", CustomMinimumSize = new Vector2(250, 40), SizeFlagsHorizontal = Control.SizeFlags.ShrinkCenter };
+        Button btnClose = new Button { Text = _isEnglish ? "[ RETURN TO TERRAIN ]" : "[ VOLVER AL TERRENO ]", CustomMinimumSize = new Vector2(250, 40), SizeFlagsHorizontal = Control.SizeFlags.ShrinkCenter };
         btnClose.AddThemeColorOverride("font_color", new Color(0.9f, 0.2f, 0.2f));
         btnClose.Pressed += () => objLayer.QueueFree();
         box.AddChild(btnClose);
@@ -1615,7 +1683,6 @@ public partial class GridManager : TileMap
     private VBoxContainer CreateObjectiveBar(string title, int current, int max, Color fillColor)
     {
         VBoxContainer container = new VBoxContainer();
-        
         Label lblTitle = new Label { Text = title };
         container.AddChild(lblTitle);
 
@@ -1627,8 +1694,8 @@ public partial class GridManager : TileMap
         bar.AddThemeStyleboxOverride("fill", fillStyle);
         
         int missing = max - current;
-        Label lblStats = new Label { Text = $"Faltantes: {missing} / Completados: {current}", HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
-        lblStats.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        string statsTemplate = GetText("STATS_FORMAT");
+        Label lblStats = new Label { Text = string.Format(statsTemplate, missing, current), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
         
         bar.AddChild(lblStats);
         container.AddChild(bar);
@@ -1636,16 +1703,14 @@ public partial class GridManager : TileMap
         return container;
     }
 
-    // Fórmula matemática para saber cuántos bloques conforman el perímetro exacto de una capa
     private int GetRingTotal(int layer)
     {
         int w = GridSize.X - (layer * 2);
         int h = GridSize.Y - (layer * 2);
         if (w <= 0 || h <= 0) return 0;
-        return (w * 2) + (h * 2) - 4; // Restamos 4 para no contar las esquinas dos veces
+        return (w * 2) + (h * 2) - 4; 
     }
 
-    // Algoritmo vectorial para contar cuántos píxeles de un anillo perimetral ya están pintados
     private int GetRingSealedCount(int layer)
     {
         int min = layer;
@@ -1666,59 +1731,49 @@ public partial class GridManager : TileMap
         return count;
     }
 
-    // =======================================================
-    // MOTOR DE JUICE (FEEDBACK AUDIOVISUAL)
-    // =======================================================
+    // --- VISUAL FEEDBACK (JUICE) ---
     private void SpawnImpactEffects(Vector2I mapPos, ActionType action, string hexColor = null)
     {
-        // 1. Convertir la coordenada vectorial del mapa a espacio global 2D en pantalla
         Vector2 worldPos = MapToLocal(mapPos);
 
-        // 2. Ensamblar Sistema de Partículas Procedimental (VFX)
-        // [CORRECCIÓN APLICADA: CpuParticles2D con la capitalización exacta de Godot 4]
         CpuParticles2D vfx = new CpuParticles2D();
         vfx.Position = worldPos;
         vfx.Emitting = true;
         vfx.OneShot = true;
-        vfx.Explosiveness = 0.85f; // Estallido rápido y agresivo
+        vfx.Explosiveness = 0.85f; 
         vfx.Lifetime = 0.6f;
         vfx.EmissionShape = CpuParticles2D.EmissionShapeEnum.Sphere;
         vfx.EmissionSphereRadius = 8f;
-        vfx.Spread = 180f; // Dispersión en todas direcciones
-        vfx.Gravity = new Vector2(0, 150f); // Gravedad hacia abajo
+        vfx.Spread = 180f; 
+        vfx.Gravity = new Vector2(0, 150f); 
         vfx.InitialVelocityMin = 30f;
         vfx.InitialVelocityMax = 80f;
         vfx.ScaleAmountMin = 2f;
         vfx.ScaleAmountMax = 4f;
 
-        // 3. Perfilado Estético (Material de los escombros)
         if (action == ActionType.Pickaxe)
         {
-            vfx.Color = new Color(0.6f, 0.6f, 0.6f); // Gris concreto
-            vfx.ScaleAmountMax = 6f; // Rocas más pesadas
+            vfx.Color = new Color(0.6f, 0.6f, 0.6f); 
+            vfx.ScaleAmountMax = 6f; 
         }
         else if (action == ActionType.Shovel)
         {
-            vfx.Color = new Color(0.4f, 0.25f, 0.1f); // Marrón tierra
-            vfx.Amount = 16; // Más partículas para simular polvo
+            vfx.Color = new Color(0.4f, 0.25f, 0.1f); 
+            vfx.Amount = 16; 
         }
         else if (action == ActionType.Paintbrush && hexColor != null)
         {
-            vfx.Color = new Color(hexColor); // Salpicadura de pintura del color táctico elegido
-            vfx.Gravity = new Vector2(0, 50f); // La pintura es densa, cae más lento
+            vfx.Color = new Color(hexColor); 
+            vfx.Gravity = new Vector2(0, 50f); 
             vfx.InitialVelocityMax = 60f;
         }
 
-        // Inyectar en el lienzo principal
         AddChild(vfx);
 
-        // 4. Temporizador de Autodestrucción del Nodo (Gestión de Memoria)
         GetTree().CreateTimer(1.0f).Timeout += () => 
         {
             if (IsInstanceValid(vfx)) vfx.QueueFree();
         };
-
-        // --- SISTEMA DE AUDIO ---
     }
 
     private void ShowFloatingMessage(string text, Color color)
@@ -1728,44 +1783,38 @@ public partial class GridManager : TileMap
         Label msgLabel = new Label { Text = text, HorizontalAlignment = HorizontalAlignment.Center };
         msgLabel.AddThemeColorOverride("font_color", color);
         
-        // --- BLINDAJE DE VISIBILIDAD ---
-        msgLabel.AddThemeFontSizeOverride("font_size", 28); // Texto más grande
-        msgLabel.AddThemeColorOverride("font_outline_color", new Color(0, 0, 0, 1)); // Borde negro sólido
-        msgLabel.AddThemeConstantOverride("outline_size", 8); // Grosor del borde
+        msgLabel.AddThemeFontSizeOverride("font_size", 28); 
+        msgLabel.AddThemeColorOverride("font_outline_color", new Color(0, 0, 0, 1)); 
+        msgLabel.AddThemeConstantOverride("outline_size", 8); 
         
-        // Posicionamiento
         msgLabel.SetAnchorsPreset(Control.LayoutPreset.CenterTop);
         msgLabel.Position = new Vector2(-400, 150); 
         msgLabel.CustomMinimumSize = new Vector2(800, 50);
 
-        // --- INYECCIÓN DE JUICE: PARTÍCULAS UI ---
         CpuParticles2D uiSparks = new CpuParticles2D();
-        uiSparks.Position = new Vector2(400, 25); // Lo centramos dentro de la caja del texto (800/2, 50/2)
+        uiSparks.Position = new Vector2(400, 25); 
         uiSparks.Emitting = true;
         uiSparks.Amount = 40;
         uiSparks.Lifetime = 1.2f;
         uiSparks.OneShot = true;
-        uiSparks.Explosiveness = 0.7f; // Estallido rápido al aparecer
+        uiSparks.Explosiveness = 0.7f; 
         uiSparks.EmissionShape = CpuParticles2D.EmissionShapeEnum.Rectangle;
-        uiSparks.EmissionRectExtents = new Vector2(350, 15); // Dispersión a lo largo de todo el texto
-        uiSparks.Gravity = new Vector2(0, 60f); // Caen suavemente
+        uiSparks.EmissionRectExtents = new Vector2(350, 15); 
+        uiSparks.Gravity = new Vector2(0, 60f); 
         uiSparks.InitialVelocityMin = 30f;
         uiSparks.InitialVelocityMax = 70f;
         uiSparks.ScaleAmountMin = 2f;
         uiSparks.ScaleAmountMax = 6f;
-        uiSparks.Color = color; // Las partículas heredan automáticamente el color (Verde) del texto
+        uiSparks.Color = color; 
 
-        // Anidamos las partículas al texto para que suban con él
         msgLabel.AddChild(uiSparks);
         toastLayer.AddChild(msgLabel);
         AddChild(toastLayer);
 
-        // Animación (Sube y se desvanece)
         Tween tween = GetTree().CreateTween();
         tween.TweenProperty(msgLabel, "position", msgLabel.Position + new Vector2(0, -90), 3.0f).SetTrans(Tween.TransitionType.Cubic).SetEase(Tween.EaseType.Out);
         tween.Parallel().TweenProperty(msgLabel, "modulate", new Color(1, 1, 1, 0), 3.0f).SetTrans(Tween.TransitionType.Cubic).SetEase(Tween.EaseType.In);
         
-        // Destrucción limpia
         tween.TweenCallback(Callable.From(() => toastLayer.QueueFree()));
     }
 
@@ -1779,7 +1828,6 @@ public partial class GridManager : TileMap
         bg.SetAnchorsPreset(Control.LayoutPreset.FullRect);
         _leaderboardLayer.AddChild(bg);
 
-        // Contenedor Central Absoluto
         CenterContainer center = new CenterContainer();
         center.SetAnchorsPreset(Control.LayoutPreset.FullRect);
         _leaderboardLayer.AddChild(center);
@@ -1788,24 +1836,21 @@ public partial class GridManager : TileMap
         mainBox.AddThemeConstantOverride("separation", 30);
         center.AddChild(mainBox);
 
-        Label title = new Label { Text = "SISTEMA DE CLASIFICACIÓN GLOBAL", HorizontalAlignment = HorizontalAlignment.Center };
+        Label title = new Label { Text = _isEnglish ? "GLOBAL LEADERBOARD SYSTEM" : "SISTEMA DE CLASIFICACIÓN GLOBAL", HorizontalAlignment = HorizontalAlignment.Center };
         title.AddThemeFontSizeOverride("font_size", 24);
         title.AddThemeColorOverride("font_color", new Color(1.0f, 0.8f, 0.2f));
         mainBox.AddChild(title);
 
-        // Contenedor Horizontal para las 3 columnas
         _leaderboardColumnsContainer = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.Center };
         _leaderboardColumnsContainer.AddThemeConstantOverride("separation", 60);
         mainBox.AddChild(_leaderboardColumnsContainer);
 
-        Button btnClose = new Button { Text = "[ VOLVER AL ECOSISTEMA ]", CustomMinimumSize = new Vector2(250, 40), SizeFlagsHorizontal = Control.SizeFlags.ShrinkCenter };
+        Button btnClose = new Button { Text = _isEnglish ? "[ RETURN TO ECOSYSTEM ]" : "[ VOLVER AL ECOSISTEMA ]", CustomMinimumSize = new Vector2(250, 40), SizeFlagsHorizontal = Control.SizeFlags.ShrinkCenter };
         btnClose.AddThemeColorOverride("font_color", new Color(0.9f, 0.2f, 0.2f));
         btnClose.Pressed += () => _leaderboardLayer.QueueFree();
         mainBox.AddChild(btnClose);
 
         AddChild(_leaderboardLayer);
-
-        // Ejecutar la primera carga de datos
         RefreshLeaderboardData();
     }
 
@@ -1817,24 +1862,19 @@ public partial class GridManager : TileMap
         {
             if (_leaderboardLayer == null || !IsInstanceValid(_leaderboardLayer) || allUsers == null) return;
 
-            // Limpiamos las columnas viejas para inyectar los datos actualizados
             foreach (Node child in _leaderboardColumnsContainer.GetChildren()) child.QueueFree();
 
-            // Convertimos a una Lista de C# para usar el motor de ordenamiento avanzado
             System.Collections.Generic.List<Godot.Collections.Dictionary> usersList = new System.Collections.Generic.List<Godot.Collections.Dictionary>();
             foreach (var u in allUsers) usersList.Add(u.AsGodotDictionary());
 
-            // 1. TOP PIEDRA
             usersList.Sort((a, b) => b["piedra"].AsInt32().CompareTo(a["piedra"].AsInt32()));
-            CreateLeaderboardColumn("⛏ MÁXIMA PIEDRA DESTRUIDA", usersList, "piedra", new Color(0.6f, 0.6f, 0.6f));
+            CreateLeaderboardColumn(GetText("TOP_STONE"), usersList, "piedra", new Color(0.6f, 0.6f, 0.6f));
 
-            // 2. TOP TIERRA
             usersList.Sort((a, b) => b["tierra"].AsInt32().CompareTo(a["tierra"].AsInt32()));
-            CreateLeaderboardColumn("⚒ MÁXIMA TIERRA REMOVIDA", usersList, "tierra", new Color(0.7f, 0.5f, 0.3f));
+            CreateLeaderboardColumn(GetText("TOP_DIRT"), usersList, "tierra", new Color(0.7f, 0.5f, 0.3f));
 
-            // 3. TOP PINTURA
             usersList.Sort((a, b) => b["pintura"].AsInt32().CompareTo(a["pintura"].AsInt32()));
-            CreateLeaderboardColumn("🖌 MÁXIMO LIENZO PINTADO", usersList, "pintura", new Color(0.8f, 0.2f, 0.6f));
+            CreateLeaderboardColumn(GetText("TOP_PAINT"), usersList, "pintura", new Color(0.8f, 0.2f, 0.6f));
         });
     }
 
@@ -1850,7 +1890,6 @@ public partial class GridManager : TileMap
         HSeparator sep = new HSeparator();
         col.AddChild(sep);
 
-        // Extraemos solo el Top 10
         int count = Mathf.Min(10, sortedUsers.Count);
         int validRanks = 0;
 
@@ -1860,15 +1899,13 @@ public partial class GridManager : TileMap
             string nick = user["nickname"].AsString();
             int score = user.ContainsKey(statKey) ? user[statKey].AsInt32() : 0;
             
-            // Si el jugador tiene 0, no lo mostramos en el Top
             if (score <= 0) continue; 
             validRanks++;
 
             Label row = new Label { Text = $"#{validRanks} | {nick} : {score} ptos" };
             
-            // Si eres tú, tu nombre brilla en la tabla
             if (nick == _activePlayerNick) 
-                row.AddThemeColorOverride("font_color", new Color(0.2f, 0.9f, 0.2f)); // Verde Neón
+                row.AddThemeColorOverride("font_color", new Color(0.2f, 0.9f, 0.2f)); 
             else
                 row.AddThemeColorOverride("font_color", new Color(0.8f, 0.8f, 0.8f));
 
@@ -1877,11 +1914,119 @@ public partial class GridManager : TileMap
 
         if (validRanks == 0)
         {
-            Label empty = new Label { Text = "Sin datos aún...", HorizontalAlignment = HorizontalAlignment.Center };
+            Label empty = new Label { Text = "No data...", HorizontalAlignment = HorizontalAlignment.Center };
             empty.AddThemeColorOverride("font_color", new Color(0.4f, 0.4f, 0.4f));
             col.AddChild(empty);
         }
 
         _leaderboardColumnsContainer.AddChild(col);
+    }
+
+    // --- I18N DICTIONARY ---
+    private readonly Dictionary<string, Dictionary<string, string>> _localizedText = new Dictionary<string, Dictionary<string, string>>()
+    {
+        { "WELCOME_TITLE", new Dictionary<string, string>{ { "es", "¡Bienvenido a Pico, Pala y Pincel!" }, { "en", "Welcome to Pick, Shovel and Paint!" } } },
+        { "WELCOME_BODY1", new Dictionary<string, string>{ { "es", "Este es un juego Benéfico en Apoyo a los Afectados el 24 de Julio de 2026 en Venezuela. Compartir el juego con tus amigos ya es un enorme apoyo a esta noble causa. ¡Gracias por llegar hasta aquí de todo corazón! ❤" }, { "en", "This is a charity game supporting those affected on July 24, 2026 in Venezuela. Sharing the game with your friends is already a huge support for this noble cause. Thank you for making it this far from the bottom of our hearts! ❤" } } },
+        { "WELCOME_CONTROLS", new Dictionary<string, string>{ { "es", "⛏ Con Pico (1) Quitas la Piedra\n⚒ Con Pala (2) Remueves Tierra\n🖌 Con Pincel (3) Pintas Casilla" }, { "en", "⛏ With Pickaxe (1) Clear Stone\n⚒ With Shovel (2) Remove Dirt\n🖌 With Paintbrush (3) Paint Tile" } } },
+        { "WELCOME_BODY3", new Dictionary<string, string>{ { "es", "Coordina a tus amigos para hacer un dibujo, mensaje o ayudar a remover los escombros es una gran ayuda. Al terminar todos los objetivos el lienzo completo será publicado para descargar y compartir, demostrándole al mundo lo unidos que podemos estar cuando es necesario estar Juntos en los momentos más complicados." }, { "en", "Coordinating with your friends to make a drawing, a message, or helping clear the debris is a huge help. Upon completing all objectives, the complete canvas will be published for download and sharing, showing the world how united we can be when it matters most in difficult times." } } },
+        { "WELCOME_BTN", new Dictionary<string, string>{ { "es", "ENTENDIDO - CONTINUAR" }, { "en", "UNDERSTOOD - CONTINUE" } } },
+        { "BTN_DOWNLOAD_MAP", new Dictionary<string, string>{ { "es", "💾" }, { "en", "💾" } } },
+        { "AUTH_REG_TITLE", new Dictionary<string, string>{ { "es", "REGISTRARSE" }, { "en", "REGISTER" } } },
+        { "AUTH_LOG_TITLE", new Dictionary<string, string>{ { "es", "INICIAR SESION" }, { "en", "LOG IN" } } },
+        { "NICK_PLACEHOLDER", new Dictionary<string, string>{ { "es", "INGRESE UN NICK" }, { "en", "ENTER A NICKNAME" } } },
+        { "PASS_PLACEHOLDER", new Dictionary<string, string>{ { "es", "CONTRASEÑA" }, { "en", "PASSWORD" } } },
+        { "RECRUITER_PLACEHOLDER", new Dictionary<string, string>{ { "es", "¿QUIÉN TE INVITÓ? (Opcional)" }, { "en", "WHO INVITED YOU? (Optional)" } } },
+        { "BTN_REGISTER", new Dictionary<string, string>{ { "es", "CONFIRMAR REGISTRO" }, { "en", "CONFIRM REGISTRATION" } } },
+        { "BTN_LOGIN", new Dictionary<string, string>{ { "es", "INICIAR" }, { "en", "LOG IN" } } },
+        { "TOGGLE_TO_LOGIN", new Dictionary<string, string>{ { "es", "¿Ya tienes un usuario? Iniciar Sesión" }, { "en", "Already have an account? Log In" } } },
+        { "TOGGLE_TO_REG", new Dictionary<string, string>{ { "es", "¿Eres Nuevo? Crear Cuenta" }, { "en", "Are you new? Create Account" } } },
+        { "HUD_BRUSH", new Dictionary<string, string>{ { "es", "🖌" }, { "en", "🖌" } } },
+        { "HUD_SHOVEL", new Dictionary<string, string>{ { "es", "⚒" }, { "en", "⚒" } } },
+        { "HUD_PICKAXE", new Dictionary<string, string>{ { "es", "⛏" }, { "en", "⛏" } } },
+        { "HUD_OBJECTIVES", new Dictionary<string, string>{ { "es", "📋" }, { "en", "📋" } } },
+        { "HUD_REINFORCEMENTS", new Dictionary<string, string>{ { "es", "🎖" }, { "en", "🎖" } } },
+        { "LEADERBOARD_TITLE", new Dictionary<string, string>{ { "es", "SISTEMA DE CLASIFICACIÓN GLOBAL" }, { "en", "GLOBAL LEADERBOARD SYSTEM" } } },
+        { "OBJECTIVES_TITLE", new Dictionary<string, string>{ { "es", "SISTEMA DE OBJETIVOS GLOBALES" }, { "en", "GLOBAL OBJECTIVES SYSTEM" } } },
+        { "BTN_RETURN_TERRAIN", new Dictionary<string, string>{ { "es", "[ VOLVER AL TERRENO ]" }, { "en", "[ RETURN TO TERRAIN ]" } } },
+        { "BTN_RETURN_ECOSYSTEM", new Dictionary<string, string>{ { "es", "[ VOLVER AL ECOSISTEMA ]" }, { "en", "[ RETURN TO ECOSYSTEM ]" } } },
+        { "TOP_STONE", new Dictionary<string, string>{ { "es", "⛏ MÁXIMA PIEDRA DESTRUIDA" }, { "en", "⛏ MAX STONE DESTROYED" } } },
+        { "TOP_DIRT", new Dictionary<string, string>{ { "es", "⚒ MÁXIMA TIERRA REMOVIDA" }, { "en", "⚒ MAX DIRT REMOVED" } } },
+        { "TOP_PAINT", new Dictionary<string, string>{ { "es", "🖌 MÁXIMO LIENZO PINTADO" }, { "en", "🖌 MAX CANVAS PAINTED" } } },
+        { "OBJ_1", new Dictionary<string, string>{ { "es", "1. SELLAR ANILLO EXTERIOR (Inhibe aparición de Piedra)" }, { "en", "1. SEAL OUTER RING (Inhibits Stone spawn)" } } },
+        { "OBJ_2", new Dictionary<string, string>{ { "es", "2. SELLAR ANILLO INTERIOR (Inhibe aparición de Tierra)" }, { "en", "2. SEAL INNER RING (Inhibits Dirt spawn)" } } },
+        { "OBJ_3", new Dictionary<string, string>{ { "es", "3. LIMPIAR TODA LA TIERRA" }, { "en", "3. CLEAR ALL DIRT" } } },
+        { "OBJ_4", new Dictionary<string, string>{ { "es", "4. LIMPIAR TODA LA PIEDRA" }, { "en", "4. CLEAR ALL STONE" } } },
+        { "OBJ_5", new Dictionary<string, string>{ { "es", "5. PINTAR EL ECOSISTEMA (Cubrir todo el Lienzo)" }, { "en", "5. PAINT THE ECOSYSTEM (Cover entire Canvas)" } } },
+        { "STATS_FORMAT", new Dictionary<string, string>{ { "es", "Faltantes: {0} / Completados: {1}" }, { "en", "Remaining: {0} / Completed: {1}" } } },
+        { "CLEANLINESS_PREFIX", new Dictionary<string, string>{ { "es", "Limpieza del Mapa: " }, { "en", "Map Cleanliness: " } } },
+        { "DONATE_BTN", new Dictionary<string, string>{ { "es", "❤️ DONATE" }, { "en", "❤️ DONATE" } } },
+        { "EARTHQUAKE_RELIEF", new Dictionary<string, string>{ { "es", "Earthquake Relief: " }, { "en", "Earthquake Relief: " } } },
+        { "MSG_RING1", new Dictionary<string, string>{ { "es", "¡ANILLO 1 SELLADO! Invasión de Piedra Bloqueada." }, { "en", "RING 1 SEALED! Stone Invasion Blocked." } } },
+        { "MSG_RING2", new Dictionary<string, string>{ { "es", "¡ANILLO 2 SELLADO! Invasión de Tierra Bloqueada." }, { "en", "RING 2 SEALED! Dirt Invasion Blocked." } } },
+        { "RANK_BOSS", new Dictionary<string, string>{ { "es", "Jefe de Nodo" }, { "en", "Node Boss" } } },
+        { "RANK_YOU", new Dictionary<string, string>{ { "es", "Tú" }, { "en", "You" } } },
+        { "RANK_ROOT", new Dictionary<string, string>{ { "es", "Tú (Nodo Raíz)" }, { "en", "You (Root Node)" } } },
+        { "RANK_RECRUIT", new Dictionary<string, string>{ { "es", "Recluta" }, { "en", "Recruit" } } },
+        { "STATS_BLOCKS_FORMAT", new Dictionary<string, string>{ { "es", "Bloques Totales: {0}\n[ Tierra: {1} | Piedra: {2} | Pintura: {3} ]" }, { "en", "Total Blocks: {0}\n[ Dirt: {1} | Stone: {2} | Paint: {3} ]" } } }
+    };
+
+    private string GetText(string key)
+    {
+        string lang = _isEnglish ? "en" : "es";
+        if (_localizedText.ContainsKey(key) && _localizedText[key].ContainsKey(lang))
+        {
+            return _localizedText[key][lang];
+        }
+        return key; 
+    }
+
+    // --- HIGH-RESOLUTION MAP EXPORT ENGINE ---
+    private void ExportHighResMap()
+    {
+        Vector2I tileSize = TileSet.TileSize;
+        int width = GridSize.X * tileSize.X;
+        int height = GridSize.Y * tileSize.Y;
+
+        Image mapImage = Image.CreateEmpty(width, height, false, Image.Format.Rgba8);
+
+        Color canvasColor = new Color(1f, 1f, 1f, 1f); 
+        Color dirtColor = new Color(0.4f, 0.25f, 0.1f, 1f); 
+        Color stoneColor = new Color(0.6f, 0.6f, 0.6f, 1f); 
+
+        for (int x = 0; x < GridSize.X; x++)
+        {
+            for (int y = 0; y < GridSize.Y; y++)
+            {
+                Vector2I gridPos = new Vector2I(x, y);
+                Rect2I rect = new Rect2I(x * tileSize.X, y * tileSize.Y, tileSize.X, tileSize.Y);
+
+                TileType type = GetTileType(gridPos);
+                Color pixelColor = canvasColor;
+                
+                if (type == TileType.Dirt) pixelColor = dirtColor;
+                else if (type == TileType.Stone) pixelColor = stoneColor;
+
+                // Superimposed paint overrides the base block color
+                if (_paintedPixels.ContainsKey(gridPos))
+                {
+                    pixelColor = _paintedPixels[gridPos];
+                    pixelColor.A = 1.0f; 
+                }
+
+                mapImage.FillRect(rect, pixelColor);
+            }
+        }
+
+        string timeStamp = Time.GetDatetimeStringFromSystem().Replace(":", "-");
+        string fileName = $"PicoPalaPincel_Map_{timeStamp}.png";
+        
+        string filePath = $"user://{fileName}"; 
+        mapImage.SavePng(filePath);
+
+        string realPath = ProjectSettings.GlobalizePath(filePath);
+        
+        string msg = _isEnglish ? $"Map saved successfully to:\n{realPath}" : $"Mapa guardado exitosamente en:\n{realPath}";
+        ShowFloatingMessage(msg, new Color(0.2f, 0.9f, 0.2f));
+        GD.Print($"[SYSTEM] High resolution map exported to: {realPath}");
     }
 }

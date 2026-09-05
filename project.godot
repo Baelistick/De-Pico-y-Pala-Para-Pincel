@@ -13,15 +13,17 @@ config_version=5
 config/name="De Pico y Pala Para Pincel"
 run/main_scene="uid://bl8ugu730o8q8"
 config/features=PackedStringArray("4.6", "C#", "Forward Plus")
-config/icon="res://icon.svg"
+config/icon="uid://busvyxqn8gnje"
 
 [autoload]
 
 SupabaseManager="*uid://b0jvtmopvcvsj"
 PlayerManager="*uid://diu78ffetft4t"
+DiscordManager="*uid://6jr7yhgrak1j"
 
 [display]
 
+window/size/viewport_width=1800
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
 
@@ -36,4 +38,6 @@ project/assembly_name="De Pico y Pala Para Pincel"
 [rendering]
 
 rendering_device/driver.windows="d3d12"
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
 textures/vram_compression/import_etc2_astc=true

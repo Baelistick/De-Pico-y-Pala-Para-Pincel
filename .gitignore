@@ -15,3 +15,12 @@ export_credentials.cfg
 .mono/
 data_*/
 mono_crash.*.json
+
+secrets.cfg
+
+# Android Build Artifacts
+android/build/
+*.apk
+*.aab
+*.aar
+*.keystore

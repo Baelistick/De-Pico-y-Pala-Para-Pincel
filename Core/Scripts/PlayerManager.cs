@@ -1,12 +1,23 @@
+/*
+ * BAELISTICK LABS | MENTE-0 ARCHITECTURE
+ * Project: De Pico y Pala Para Pincel
+ * Module: PlayerManager
+ * Description: Singleton (Autoload) managing player identity, local persistence, 
+ *              referral tracking, and action cooldown state validation.
+ * Coupling Level: Low. Interacts exclusively with local storage (session.cfg) 
+ *                 and SupabaseManager for remote syncing.
+*/
+
 using Godot;
 using System;
 using System.Text;
 
-// Nivel de acoplamiento: Mínimo (Autoload). Gestiona la identidad del jugador y persistencia local.
 public partial class PlayerManager : Node
 {
+    // Global access point
     public static PlayerManager Instance { get; private set; }
 
+    // Core Identity & State Properties
     public string PlayerId { get; private set; }
     public string ReferralCode { get; private set; }
     public int BonusActions { get; private set; } = 0;
@@ -20,6 +31,10 @@ public partial class PlayerManager : Node
         InitializeSession();
     }
 
+    /// <summary>
+    /// Initializes the player session. Loads existing credentials from local storage
+    /// or generates a new anonymous profile if no save file exists.
+    /// </summary>
     private void InitializeSession()
     {
         ConfigFile config = new ConfigFile();
@@ -27,18 +42,18 @@ public partial class PlayerManager : Node
 
         if (err == Error.Ok && config.HasSectionKey("Player", "Id"))
         {
-            // Cargar sesión existente
+            // Restore existing session
             PlayerId = (string)config.GetValue("Player", "Id");
             ReferralCode = (string)config.GetValue("Player", "ReferralCode");
             FetchPlayerData();
         }
         else
         {
-            // Nuevo jugador: Crear credencial anónima
+            // Generate new anonymous credentials
             PlayerId = Guid.NewGuid().ToString();
             ReferralCode = GenerateRandomCode(6);
 
-            // Guardar localmente
+            // Persist locally
             config.SetValue("Player", "Id", PlayerId);
             config.SetValue("Player", "ReferralCode", ReferralCode);
             config.Save(SAVE_PATH);
@@ -47,11 +62,15 @@ public partial class PlayerManager : Node
         }
     }
 
+    /// <summary>
+    /// Generates an alphanumeric verification code of the specified length.
+    /// </summary>
     private string GenerateRandomCode(int length)
     {
         const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
         char[] stringChars = new char[length];
         Random random = new Random();
+        
         for (int i = 0; i < stringChars.Length; i++)
         {
             stringChars[i] = chars[random.Next(chars.Length)];
@@ -59,9 +78,11 @@ public partial class PlayerManager : Node
         return new string(stringChars);
     }
 
+    /// <summary>
+    /// Registers a new player in the backend. Evaluates URL parameters for referral tracking.
+    /// </summary>
     private void RegisterPlayerInDatabase()
     {
-        // Verificar si el jugador llegó mediante un enlace de referidos en la URL (WebGL)
         string referredBy = GetReferralFromURL();
 
         string jsonBody = referredBy != null 
@@ -70,10 +91,13 @@ public partial class PlayerManager : Node
 
         SupabaseManager.Instance.PostPlayer(jsonBody, (success) => 
         {
-            if (success) GD.Print($"Jugador registrado exitosamente: {PlayerId}");
+            if (success) GD.Print($"[AUTH] Player registered successfully: {PlayerId}");
         });
     }
 
+    /// <summary>
+    /// Synchronizes local state with backend database values (bonuses and cooldowns).
+    /// </summary>
     private void FetchPlayerData()
     {
         SupabaseManager.Instance.GetPlayer(PlayerId, (data) => 
@@ -82,6 +106,7 @@ public partial class PlayerManager : Node
             {
                 BonusActions = (int)data["bonus_actions"];
                 string lastActionStr = (string)data["last_action_at"];
+                
                 if (DateTime.TryParse(lastActionStr, out DateTime parsedDate))
                 {
                     LastActionAt = parsedDate;
@@ -90,12 +115,14 @@ public partial class PlayerManager : Node
         });
     }
 
+    /// <summary>
+    /// Extracts referral codes from the URL query string if the application is running via WebGL.
+    /// </summary>
     private string GetReferralFromURL()
     {
-        // Lógica para capturar el parámetro '?ref=XXXXXX' si el ejecutable es WebGL/HTML5
         if (OS.HasFeature("web"))
         {
-            // En Godot 4.x WebGL se captura mediante JavaScriptBridge
+            // Godot 4.x JS Bridge for DOM location access
             var window = JavaScriptBridge.GetInterface("window");
             var location = (GodotObject)window.Get("location");
             string search = (string)location.Get("search");
@@ -104,22 +131,27 @@ public partial class PlayerManager : Node
             {
                 int index = search.IndexOf("ref=") + 4;
                 string code = search.Substring(index);
-                return code.Split('&')[0]; // Extrae el código limpio
+                return code.Split('&')[0]; // Sanitize and return exact code
             }
         }
         return null;
     }
 
-	// Evalúa la regla estricta de tiempo o bonificaciones
+    /// <summary>
+    /// Validates if the player meets the requirements to execute a grid action.
+    /// Prioritizes bonus points over time-based cooldowns.
+    /// </summary>
     public bool CanPerformAction()
     {
-        if (BonusActions > 0) return true; // Prioriza gastar bonos
+        if (BonusActions > 0) return true; 
         
         TimeSpan timeSinceLastAction = DateTime.UtcNow - LastActionAt;
         return timeSinceLastAction.TotalMinutes >= 10;
     }
 
-    // Ejecuta el cobro de la acción y actualiza la BD
+    /// <summary>
+    /// Deducts action cost, updates local timestamps, and syncs the new state to Supabase.
+    /// </summary>
     public void ConsumeAction()
     {
         if (BonusActions > 0)
@@ -129,7 +161,7 @@ public partial class PlayerManager : Node
         
         LastActionAt = DateTime.UtcNow;
         
-        // Formatea la fecha al estándar ISO 8601 que usa PostgreSQL/Supabase
+        // Format to ISO 8601 standard for strict PostgreSQL compatibility
         string timestamp = LastActionAt.ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
         string jsonBody = $"{{\"last_action_at\": \"{timestamp}\", \"bonus_actions\": {BonusActions}}}";
         
