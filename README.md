@@ -5,12 +5,6 @@
 ![Godot Engine](https://img.shields.io/badge/GODOT-%23FFFFFF.svg?style=for-the-badge&logo=godot-engine) ![C#](https://img.shields.io/badge/c%23-%23239120.svg?style=for-the-badge&logo=c-sharp&logoColor=white) ![.NET](https://img.shields.io/badge/.NET-5C2D91?style=for-the-badge&logo=.net&logoColor=white) ![Supabase](https://img.shields.io/badge/Supabase-3ECF8E?style=for-the-badge&logo=supabase&logoColor=white) ![Android](https://img.shields.io/badge/Android-3DDC84?style=for-the-badge&logo=android&logoColor=white)
 
 ---
-
-## 👁️ Visual Proof (El Ecosistema en Acción)
-
-
----
-
 ## 🧠 Arquitectura Multijugador (Mente-0)
 Este proyecto prescinde de los tradicionales WebSockets a favor de una arquitectura basada en **Sincronización Delta mediante peticiones HTTP REST**. 
 
