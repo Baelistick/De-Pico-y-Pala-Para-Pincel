@@ -7,8 +7,7 @@
 ---
 
 ## 👁️ Visual Proof (El Ecosistema en Acción)
-*(Inserte aquí un GIF o imagen de alta calidad del ecosistema siendo limpiado y pintado por múltiples jugadores simultáneamente)*
-`![Gameplay Preview](link-al-gif-o-imagen.gif)`
+
 
 ---
 
